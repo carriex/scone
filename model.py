@@ -105,7 +105,6 @@ class DecoderRNN(nn.Module):
         input = input.view(-1, 1)
         embedded = self.embedding(input)
         # input = torch.cat((embedded, state), dim=2)
-        input = embedded
         attn_weights = None
         state_attn_weights = None
 
@@ -123,7 +122,7 @@ class DecoderRNN(nn.Module):
             hidden = (hidden_state.transpose(0, 1).contiguous(), hidden[1])
         # --------------------------------------- #
 
-        output, hidden = self.rnn(input, hidden)
+        output, hidden = self.rnn(embedded, hidden)
         output = self.softmax(self.out(output.squeeze()))
         return output, hidden, attn_weights, context_vector, state_attn_weights
 
@@ -251,14 +250,14 @@ class SeqToSeqModel(nn.Module):
             beaker_state_encoding.append(state_encoder_hidden[0])
         return torch.cat(beaker_state_encoding, dim=0).transpose(0, 1)
 
-    def _decode(self,instruction_encoder_hidden,
-                                       encoder_states,
-                                       instruction_mask,
-                                       world_states,
-                                       batch_state_encoding,
-                                       batch_init_state_encoding,
-                                       actions=None,
-                                       actions_str=None):
+    def _decode(self, instruction_encoder_hidden,
+                       encoder_states,
+                       instruction_mask,
+                       world_states,
+                       batch_state_encoding,
+                       batch_init_state_encoding,
+                       actions=None,
+                       actions_str=None):
         """
         Decoder
         """
@@ -282,8 +281,10 @@ class SeqToSeqModel(nn.Module):
         context_vector = torch.zeros((batch_size, 1, self.instruction_encoder.hidden_size * 2))
 
         for i in range(self.action_decoder.num_layers):
-            decoder_hidden_states[i] = torch.cat((instruction_encoder_hidden[0][0], instruction_encoder_hidden[0][1]), dim=1).view(1, batch_size, -1)
-            decoder_cell_states[i] = torch.cat((instruction_encoder_hidden[1][0], instruction_encoder_hidden[1][1]), dim=1).view(1, batch_size, -1)
+            decoder_hidden_states[i] = torch.cat((instruction_encoder_hidden[0][0],
+                                                  instruction_encoder_hidden[0][1]), dim=1).view(1, batch_size, -1)
+            decoder_cell_states[i] = torch.cat((instruction_encoder_hidden[1][0],
+                                                instruction_encoder_hidden[1][1]), dim=1).view(1, batch_size, -1)
 
         ### move tensor to GPU ###
         if torch.cuda.is_available():
@@ -301,8 +302,11 @@ class SeqToSeqModel(nn.Module):
 
 
         for idx in range(self.max_decoder_length):
-            decoder_output, (decoder_hidden_states, decoder_cell_states), attn_weights, context_vector, state_attn_weights = self.action_decoder(
-                decoder_input, (decoder_hidden_states, decoder_cell_states), batch_state_encoding, batch_init_state_encoding, encoder_states, instruction_mask, context_vector
+            decoder_output, (decoder_hidden_states, decoder_cell_states), attn_weights, \
+            context_vector, state_attn_weights = self.action_decoder(
+                decoder_input, (decoder_hidden_states, decoder_cell_states),
+                batch_state_encoding, batch_init_state_encoding, encoder_states,
+                instruction_mask, context_vector
             )
             decoder_outputs[:, idx, :] = decoder_output
             topv, topi = decoder_output.topk(k=1, dim=1)
@@ -317,6 +321,7 @@ class SeqToSeqModel(nn.Module):
                         try:
                             world_states[i] = world_state.execute_seq([single_action[i]])
                         except Exception:
+                            # ignore wrong actions
                             pass
                     else:
                         EOS[i] = True

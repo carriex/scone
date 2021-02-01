@@ -260,7 +260,6 @@ class AlchemySolver(pl.LightningModule):
 
         # interaction prediction
         else:
-            # pass
             decoded_actions, world_states = self.model.predict_interaction(batch)
             self.test_interaction_results['id'] += batch['identifier']
             self.test_interaction_results['final_world_state'] += world_states

@@ -1,5 +1,5 @@
 """
-Dataset creation
+Dataset creation for both instruction dataset and interaction dataset
 """
 import torch
 import json
@@ -46,9 +46,9 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         self.num_beakers = 7
         self.supplementary_tokens = ['_UNK', '_EOS', '_SOS', '_PAD']
 
-        # -------------- create encoding dicts -------------- #
+        # create encoding dicts and list of samples
         self.interactions_examples, self.instruction_examples = self._load_data_and_word_encoding(file_name)
-        # use preset encoding dicts if passed-in
+        # update preset encoding dicts if passed-in
         if word_to_idx is not None:
             self.word_to_idx = word_to_idx
         if action_to_idx is not None:
@@ -168,6 +168,7 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
             return sequence[:length] + [pad_token] * pad_length
 
     def _encode_and_pad_action(self, actions):
+        '''returns tensor of encoded action'''
         indexes = []
         for action in actions:
             indexes.append(self.action_to_idx[action])
@@ -216,6 +217,7 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
 
 
     def _encode_and_pad_instruction(self, instruction):
+        '''returns tensor of encoded instructions and corresponding masking array'''
         indexes = []
         for word in instruction.split():
             if word in self.word_to_idx:
@@ -225,9 +227,9 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         indexes.append(self.word_to_idx['_EOS'])
         masked_true = torch.tensor([False for _ in indexes])
         masked_false = torch.tensor([True for _ in range(self.max_instruction_length - len(indexes))])
-        masked = torch.cat((masked_true, masked_false), dim=0)
+        masked_array = torch.cat((masked_true, masked_false), dim=0)
         indexes = self._pad_sequence(indexes, self.max_instruction_length, self.word_to_idx['_PAD'])
-        return torch.tensor(indexes), masked
+        return torch.tensor(indexes), masked_array
 
     def _encode_and_pad_whole_instruction(self, instruction):
         indexes = []
@@ -239,9 +241,9 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         indexes.append(self.word_to_idx['_EOS'])
         masked_true = torch.tensor([False for _ in indexes])
         masked_false = torch.tensor([True for _ in range(self.max_whole_instruction_length - len(indexes))])
-        masked = torch.cat((masked_true, masked_false), dim=0)
+        masked_array = torch.cat((masked_true, masked_false), dim=0)
         indexes = self._pad_sequence(indexes, self.max_whole_instruction_length, self.word_to_idx['_PAD'])
-        return torch.tensor(indexes), masked
+        return torch.tensor(indexes), masked_array
 
     def _create_state_encoding(self):
         # add colors
@@ -281,13 +283,8 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
 
     def _load_data_and_word_encoding(self, filename):
         """Loads the data from the JSON files.
-
-        You are welcome to create your own class storing the data in it; e.g., you
-        could create AlchemyWorldStates for each example in your data and store it.
-
         Inputs:
             filename (str): Filename of a JSON encoded file containing the data.
-
         Returns:
             examples: [instruction, actions, before_env, after_env]
         """
@@ -304,7 +301,7 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                     if i == 0:
                         before_env = d['initial_env']
                     else:
-                        before_env = utterances[i - 1]['after_env']
+                        before_env = utterances[i-1]['after_env']
                     after_env = utterance['after_env']
                     actions = utterance['actions']
                     action_words = [word for action in self._preprocess_actions_str(actions) for word in action.split()]
@@ -351,6 +348,7 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         return interactions_examples, instruction_examples
 
 
+# TODO: refactor to avoid code redundancy
 class AlchemyInteractionDataset(torch.utils.data.Dataset):
     """
     Pytorch dataset for Alchemy interaction, consisting of Alchemy instructions
@@ -370,6 +368,7 @@ class AlchemyInteractionDataset(torch.utils.data.Dataset):
         self.max_action_word_length = 0
         self.max_state_length = 0
         self.word_to_idx = {}
+        # TODO: remove as not needed; encoding action word individually instead
         self.action_to_idx = {}
         self.action_word_to_idx = {}
         self.state_to_idx = {}
@@ -641,8 +640,8 @@ class AlchemyInteractionDataset(torch.utils.data.Dataset):
                     actions = utterance['actions']
                     action_words = [word for action in self._preprocess_actions_str(actions) for word in action.split()]
                     instruction = utterance['instruction']
-                    # instruction = before_env + ' ' + utterance['instruction']
                     whole_instruction = ''
+                    # add separater for instructions
                     for idx, example in enumerate(instructions):
                         if idx < len(instructions) - 1:
                             whole_instruction += example[0] + ' SEP_PREV '
@@ -650,6 +649,7 @@ class AlchemyInteractionDataset(torch.utils.data.Dataset):
                             whole_instruction += example[0] + ' SEP_CURR '
                     whole_instruction += instruction
                     states = self.preprocess_world_state_str(before_env)
+                    # update max length
                     if len(actions) > self.max_action_length:
                         self.max_action_length = len(actions)
                     if len(action_words) > self.max_action_word_length:
