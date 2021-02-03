@@ -7,6 +7,11 @@ from alchemy_fsa import AlchemyFSA, COLORS, EMPTY_SYMBOL, NUM_BEAKER, STARTER_ST
 from alchemy_world_state import AlchemyWorldState
 
 def collate_fn(data):
+    """
+    Function to collect list of samples into batches based on type:
+    Input: data(dict): key: feature_name, value: list of features
+    Returns: data(dict): key: feature_name, value: batch of features
+    """
     keys = data[0].keys()
     res = {}
     for key in keys:
@@ -22,13 +27,16 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
     """
     Pytorch dataset for Alchemy instructions
     """
-    def __init__(self, file_name, word_to_idx=None,
+    def __init__(self, file_name, is_interaction_dataset=False,
+                                  word_to_idx=None,
                                   action_word_to_idx=None,
                                   action_to_idx=None,
                                   state_to_idx=None,
                                   max_instruction_length=None,
-                                  max_whole_instruction_length=None):
+                                  max_whole_instruction_length=None,
+                                  max_beaker_state_length=None):
 
+        self.is_interaction_dataset = is_interaction_dataset
         self.max_instruction_length = 0
         self.max_action_length = 0
         self.max_action_word_length = 0
@@ -70,6 +78,9 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         if max_whole_instruction_length is not None:
             self.max_whole_instruction_length = max_whole_instruction_length
 
+        if max_beaker_state_length is not None:
+            self.max_beaker_state_length = max_beaker_state_length
+
         self.num_word_actions = len(self.action_word_to_idx)
         self.idx_to_action = self._idx_to_action_list(self.action_to_idx)
         self.idx_to_action_words = {idx:word for (word, idx) in self.action_word_to_idx.items()}
@@ -78,20 +89,23 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
 
 
     def __len__(self):
-        return len(self.instruction_examples)
+        if self.is_interaction_dataset:
+            return len(self.interactions_examples)
+        else:
+            return len(self.instruction_examples)
 
-    def __getitem__(self, idx):
+    def _get_instruction_item(self, idx):
         '''
-        Return an instruction example
-        Inputs:
-                idx: idx of current sample
-        Outputs:
-                instruction(Array): instruction encoded by word_to_idx
-                actions(Array): action encoded by action_to_idx
-                before_env(String): world state string before the action
-                after_env(Sting): world state string after the action
-        '''
-        identifier, instruction_str, actions_str, action_words,\
+                Return an instruction example
+                Inputs:
+                        idx: idx of current sample
+                Outputs:
+                        instruction(Array): instruction encoded by word_to_idx
+                        actions(Array): action encoded by action_to_idx
+                        before_env(String): world state string before the action
+                        after_env(Sting): world state string after the action
+                '''
+        identifier, instruction_str, actions_str, action_words, \
         before_env_str, after_env_str, initial_env_str, init_states, whole_instruction = self.instruction_examples[idx]
 
         actions_str = self._preprocess_actions_str(actions_str)
@@ -119,6 +133,70 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
             'whole_instruction': whole_instruction,
             'whole_instruction_mask': whole_instruction_mask
         }
+
+    def _get_interaction_item(self, idx):
+        '''
+        Return list of instruction examples (interaction)
+        '''
+        identifier = self.interactions_examples[idx]['identifier']
+        instruction_examples = self.interactions_examples[idx]['instructions']
+        instructions = []
+        actions = []
+        action_words = []
+        action_labels = []
+        before_env_strs = []
+        after_env_strs = []
+        actions_strs = []
+        instruction_strs = []
+        instruction_mask = []
+        init_states = []
+        whole_instructions = []
+        whole_instruction_masks = []
+
+        for example in instruction_examples:
+            instruction_identifier, instruction_str, actions_str, action_word, \
+            before_env_str, after_env_str, initial_env_str, init_state, whole_instruction = example
+
+            actions_str = self._preprocess_actions_str(actions_str)
+            instruction, masked = self._encode_and_pad_instruction(instruction_str)
+            instructions.append(instruction)
+            instruction_mask.append(masked)
+            actions.append(self._encode_and_pad_action(actions_str))
+            action_words.append(self._encode_and_pad_action_word(action_word))
+            action_labels.append(self._encode_and_pad_action_labels(actions_str))
+            instruction_strs.append(instruction_str)
+            actions_strs.append(actions_str)
+            before_env_strs.append(before_env_str)
+            after_env_strs.append(after_env_str)
+            init_states.append(torch.stack([self.encode_and_pad_beaker_state(state) for state in init_state]))
+            whole_instruction, whole_instruction_mask = self._encode_and_pad_whole_instruction(whole_instruction)
+            whole_instructions.append(whole_instruction)
+            whole_instruction_masks.append(whole_instruction_mask)
+
+        return {
+            'identifier': identifier,
+            'initial_env_str': self.interactions_examples[idx]['initial_env_str'],
+            'instruction': torch.stack(instructions),
+            'instruction_mask': torch.stack(instruction_mask),
+            'instruction_str': instruction_strs,
+            'actions': torch.stack(actions),
+            'action_labels': torch.stack(action_labels),
+            'action_words': torch.stack(action_words),
+            'action_word_labels': torch.stack(action_words),
+            'actions_str': actions_strs,
+            'before_env_str': before_env_strs,
+            'after_env_str': after_env_strs,
+            'init_states': init_states,
+            'whole_instruction': torch.stack(whole_instructions),
+            'whole_instruction_mask': torch.stack(whole_instruction_masks)
+        }
+
+    def __getitem__(self, idx):
+        if self.is_interaction_dataset:
+            return self._get_interaction_item(idx)
+        else:
+            return self._get_instruction_item(idx)
+
 
     def _add_supplementary_tokens(self, token_to_idx):
         for token in self.supplementary_tokens:
@@ -296,10 +374,10 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                 examples = []
                 utterances = d['utterances']
                 identifier = d['identifier']
-                initial_env = d['initial_env']
+                initial_env_str = d['initial_env']
                 for i, utterance in enumerate(utterances):
                     if i == 0:
-                        before_env = d['initial_env']
+                        before_env = initial_env_str
                     else:
                         before_env = utterances[i-1]['after_env']
                     after_env = utterance['after_env']
@@ -333,8 +411,12 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                             self.word_to_idx[word] = len(self.word_to_idx)
                             self.vocab_size += 1
                     examples.append(['{}-{}'.format(identifier, i), instruction, actions, action_words,
-                                     before_env, after_env, initial_env, states, whole_instruction])
-                interactions_examples.append(examples)
+                                     before_env, after_env, initial_env_str, states, whole_instruction])
+                interactions_examples.append({
+                    'identifier': identifier,
+                    'instructions': examples,
+                    'initial_env_str': initial_env_str
+                })
                 instruction_examples.extend(examples)
 
         self._add_supplementary_tokens(self.word_to_idx)
@@ -346,329 +428,6 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         self.max_beaker_state_length = self.max_beaker_state_length + 1
 
         return interactions_examples, instruction_examples
-
-
-# TODO: refactor to avoid code redundancy
-class AlchemyInteractionDataset(torch.utils.data.Dataset):
-    """
-    Pytorch dataset for Alchemy interaction, consisting of Alchemy instructions
-    """
-    def __init__(self, file_name, word_to_idx,
-                                  action_word_to_idx,
-                                  action_to_idx,
-                                  state_to_idx,
-                                  max_instruction_length,
-                                  max_whole_instruction_length,
-                                  max_beaker_state_length):
-
-        self.max_instruction_length = max_instruction_length
-        self.max_whole_instruction_length = max_whole_instruction_length
-        self.max_beaker_state_length = max_beaker_state_length
-        self.max_action_length = 0
-        self.max_action_word_length = 0
-        self.max_state_length = 0
-        self.word_to_idx = {}
-        # TODO: remove as not needed; encoding action word individually instead
-        self.action_to_idx = {}
-        self.action_word_to_idx = {}
-        self.state_to_idx = {}
-        self.num_actions = 0
-        self.num_word_actions = 0
-        self.vocab_size = 0
-        self.supplementary_tokens = ['_UNK', '_EOS', '_SOS', '_PAD']
-
-        # -------------- create encoding dicts -------------- #
-        self.interactions_examples = self._load_data_and_word_encoding(file_name)
-        # use preset encoding dicts if passed-in
-        self.word_to_idx = word_to_idx
-        self.action_to_idx = action_to_idx
-        self.action_word_to_idx = action_word_to_idx
-        self.state_to_idx = state_to_idx
-
-        self.num_word_actions = len(self.action_word_to_idx)
-        self.idx_to_action = self._idx_to_action_list(self.action_to_idx)
-        self.idx_to_action_words = {idx: word for (word, idx) in self.action_word_to_idx.items()}
-        self.idx_to_word = {idx: word for (word, idx) in self.word_to_idx.items()}
-        self.action_to_label_idx = self.action_to_idx.copy()
-
-
-    def __len__(self):
-        return len(self.interactions_examples)
-
-    def __getitem__(self, idx):
-        '''
-        Return list of instruction examples
-        '''
-        identifier = self.interactions_examples[idx]['identifier']
-        instruction_examples = self.interactions_examples[idx]['instructions']
-        instructions = []
-        actions = []
-        action_words = []
-        action_labels = []
-        before_env_strs = []
-        after_env_strs =[]
-        actions_strs = []
-        instruction_strs = []
-        instruction_mask = []
-        init_states = []
-        whole_instructions = []
-        whole_instruction_masks = []
-
-        for example in instruction_examples:
-            instruction_str, actions_str, action_word,\
-            before_env_str, after_env_str, init_state, whole_instruction = example
-
-            actions_str = self._preprocess_actions_str(actions_str)
-            instruction, masked = self._encode_and_pad_instruction(instruction_str)
-            instructions.append(instruction)
-            instruction_mask.append(masked)
-            actions.append(self._encode_and_pad_action(actions_str))
-            action_words.append(self._encode_and_pad_action_word(action_word))
-            action_labels.append(self._encode_and_pad_action_labels(actions_str))
-            instruction_strs.append(instruction_str)
-            actions_strs.append(actions_str)
-            before_env_strs.append(before_env_str)
-            after_env_strs.append(after_env_str)
-            init_states.append(torch.stack([self.encode_and_pad_beaker_state(state) for state in init_state]))
-            whole_instruction, whole_instruction_mask = self._encode_and_pad_whole_instruction(whole_instruction)
-            whole_instructions.append(whole_instruction)
-            whole_instruction_masks.append(whole_instruction_mask)
-
-
-        return {
-            'identifier': identifier,
-            'instruction': torch.stack(instructions),
-            'instruction_mask': torch.stack(instruction_mask),
-            'instruction_str': instruction_strs,
-            'actions': torch.stack(actions),
-            'action_labels':  torch.stack(action_labels),
-            'action_words': torch.stack(action_words),
-            'action_word_labels': torch.stack(action_words),
-            'actions_str': actions_strs,
-            'before_env_str': before_env_strs,
-            'after_env_str': after_env_strs,
-            'init_states': init_states,
-            'whole_instruction': torch.stack(whole_instructions),
-            'whole_instruction_mask': torch.stack(whole_instruction_masks)
-        }
-
-
-    def _add_supplementary_tokens(self, token_to_idx):
-        for token in self.supplementary_tokens:
-            if token not in token_to_idx:
-                token_to_idx[token] = len(token_to_idx)
-
-    def _dict_to_list(self, dict):
-        list = [None] * len(dict)
-        for key, value in dict.items():
-            list[value] = key
-        return list
-
-
-    def _idx_to_action_list(self, action_to_idx):
-        idx_to_action = {}
-        for action, idx in action_to_idx.items():
-            if action in self.supplementary_tokens:
-                idx_to_action[idx] = action
-            else:
-                idx_to_action[idx] = action.split()
-        return idx_to_action
-
-    def _preprocess_actions_str(self, actions_str):
-        processed_actions_str = []
-        for actions in actions_str:
-            if 'pop' in actions:
-                actions += ' _NONE'
-            processed_actions_str.append(actions)
-        return processed_actions_str
-
-    def preprocess_world_state_str(self, world_state_str):
-        states = []
-        for state in world_state_str.split(" "):
-            states.append(state)
-        return states
-
-    def encode_and_pad_state(self, world_state_str):
-        world_state_str = world_state_str.replace(" ", "")
-        indexes = []
-        for state in world_state_str:
-            indexes.append(self.state_to_idx[state])
-        indexes.append(self.state_to_idx['_EOS'])
-        indexes = self._pad_sequence(indexes, self.max_state_length, self.state_to_idx['_PAD'],
-                                     pad_start=False)
-        return torch.tensor(indexes)
-
-    def _encode_and_pad_whole_instruction(self, instruction):
-        indexes = []
-        for word in instruction.split():
-            if word in self.word_to_idx:
-                indexes.append(self.word_to_idx[word])
-            else:
-                indexes.append(self.word_to_idx['_UNK'])
-        indexes.append(self.word_to_idx['_EOS'])
-        masked_true = torch.tensor([False for _ in indexes])
-        masked_false = torch.tensor([True for _ in range(self.max_whole_instruction_length - len(indexes))])
-        masked = torch.cat((masked_true, masked_false), dim=0)
-        indexes = self._pad_sequence(indexes, self.max_whole_instruction_length, self.word_to_idx['_PAD'])
-        return torch.tensor(indexes), masked
-
-    def _pad_sequence(self, sequence, length, pad_token, pad_start=False):
-        pad_length = max(0, length - len(sequence))
-        if pad_start:
-            return [pad_token] * pad_length + sequence
-        else:
-            return sequence + [pad_token] * pad_length
-
-
-    def _encode_and_pad_action(self, actions):
-        indexes= []
-        for action in actions:
-            indexes.append(self.action_to_idx[action])
-        indexes.append(self.action_to_idx['_EOS'])
-        indexes = self._pad_sequence(indexes, self.max_action_length, self.action_to_idx['_PAD'],
-                                     pad_start=False)
-        return torch.tensor(indexes)
-
-    def _encode_and_pad_action_word(self, actions):
-        indexes= []
-        for action in actions:
-            indexes.append(self.action_word_to_idx[action])
-        indexes.extend([self.action_word_to_idx['_EOS'], self.action_word_to_idx['_NONE'], self.action_word_to_idx['_NONE']])
-        indexes = self._pad_sequence(indexes, self.max_action_word_length, self.action_word_to_idx['_PAD'],
-                                     pad_start=False)
-        return torch.tensor(indexes)
-
-    def _encode_and_pad_action_labels(self, actions):
-        indexes= []
-        for action in actions:
-            indexes.append(self.action_to_label_idx[action])
-        indexes.append(self.action_to_label_idx['_EOS'])
-        indexes = self._pad_sequence(indexes, self.max_action_length, self.action_to_label_idx['_PAD'],
-                                     pad_start=False)
-        return torch.tensor(indexes)
-
-    def encode_and_pad_beaker_state(self, world_state_str):
-        """
-        Encode and pad a beaker state string
-        """
-        world_state_str = world_state_str.replace(" ", "")
-        indexes = []
-        for state in world_state_str:
-            indexes.append(self.state_to_idx[state])
-        indexes.append(self.state_to_idx['_EOS'])
-        indexes = self._pad_sequence(indexes, self.max_beaker_state_length, self.state_to_idx['_PAD'],
-                                     pad_start=False)
-        return torch.tensor(indexes)
-
-    def _encode_and_pad_instruction(self, instruction):
-        indexes = []
-        for word in instruction.split():
-            if word in self.word_to_idx:
-                indexes.append(self.word_to_idx[word])
-            else:
-                indexes.append(self.word_to_idx['_UNK'])
-        indexes.append(self.word_to_idx['_EOS'])
-        masked_true = torch.tensor([True for _ in indexes])
-        masked_false = torch.tensor([False for _ in range(self.max_instruction_length - len(indexes))])
-        masked = torch.cat((masked_true, masked_false), dim=0)
-        indexes = self._pad_sequence(indexes, self.max_instruction_length, self.word_to_idx['_PAD'])
-        return torch.tensor(indexes), masked
-
-    def _create_state_encoding(self):
-        # add colors
-        for color in COLORS:
-            self.state_to_idx[color] = len(self.state_to_idx)
-        # add empty symbol
-        self.state_to_idx[EMPTY_SYMBOL] = len(self.state_to_idx)
-        # add beaker id
-        for id in range(NUM_BEAKER):
-            self.state_to_idx[str(id + 1)] = len(self.state_to_idx)
-        # add colon
-        self.state_to_idx[':'] = len(self.state_to_idx)
-        # add EOS
-        self.state_to_idx['_EOS'] = len(self.state_to_idx)
-        # add PAD
-        self.state_to_idx['_PAD'] = len(self.state_to_idx)
-
-    def _create_action_encoding(self):
-        starter_world_state = AlchemyWorldState(STARTER_STATE)
-        fsa = AlchemyFSA(starter_world_state)
-        actions = fsa.valid_actions()
-        for (i, action) in enumerate(actions):
-            action_string = ' '.join(action)
-            self.action_to_idx[action_string] = len(self.action_to_idx)
-        self._add_supplementary_tokens(self.action_to_idx)
-        self.num_actions = len(self.action_to_idx)
-
-    def _create_action_word_encoding(self):
-        starter_world_state = AlchemyWorldState(STARTER_STATE)
-        fsa = AlchemyFSA(starter_world_state)
-        actions = fsa.valid_actions()
-        for (i, action) in enumerate(actions):
-            for action_word in action:
-                if action_word not in self.action_word_to_idx:
-                    self.action_word_to_idx[action_word] = len(self.action_word_to_idx)
-        self._add_supplementary_tokens(self.action_word_to_idx)
-        self.num_word_actions = len(self.action_word_to_idx)
-
-    def _load_data_and_word_encoding(self, filename):
-        """Loads the data from the JSON files.
-
-        You are welcome to create your own class storing the data in it; e.g., you
-        could create AlchemyWorldStates for each example in your data and store it.
-
-        Inputs:
-            filename (str): Filename of a JSON encoded file containing the data.
-
-        Returns:
-            examples: [instruction, actions, before_env, after_env]
-        """
-        # identifier, before_env, instructions
-        interactions_examples = []
-        with open(filename) as json_file:
-            data = json.load(json_file)
-            for d in data:
-                instructions = []
-                utterances = d['utterances']
-                identifier = d['identifier']
-                for i, utterance in enumerate(utterances):
-                    if i == 0:
-                        before_env = d['initial_env']
-                    else:
-                        before_env = utterances[i - 1]['after_env']
-                    after_env = utterance['after_env']
-                    actions = utterance['actions']
-                    action_words = [word for action in self._preprocess_actions_str(actions) for word in action.split()]
-                    instruction = utterance['instruction']
-                    whole_instruction = ''
-                    # add separater for instructions
-                    for idx, example in enumerate(instructions):
-                        if idx < len(instructions) - 1:
-                            whole_instruction += example[0] + ' SEP_PREV '
-                        else:
-                            whole_instruction += example[0] + ' SEP_CURR '
-                    whole_instruction += instruction
-                    states = self.preprocess_world_state_str(before_env)
-                    # update max length
-                    if len(actions) > self.max_action_length:
-                        self.max_action_length = len(actions)
-                    if len(action_words) > self.max_action_word_length:
-                        self.max_action_word_length = len(action_words)
-                    if len(after_env) > self.max_state_length:
-                        self.max_state_length = len(after_env)
-                    instructions.append([instruction, actions, action_words,
-                                     before_env, after_env, states, whole_instruction])
-                interactions_examples.append({
-                    'identifier': identifier,
-                    'instructions': instructions
-                })
-
-        self._add_supplementary_tokens(self.word_to_idx)
-        self.max_action_word_length = self.max_action_word_length + 4
-        self.max_action_length = self.max_action_length + 2
-        self.max_state_length = self.max_state_length + 1
-
-        return interactions_examples
 
 
 

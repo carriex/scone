@@ -441,6 +441,7 @@ class SeqToSeqModel(nn.Module):
         """
         whole_instruction = interaction_example['whole_instruction'] # batch_size x num_instruction x seq_len
         before_env_str = [before_env[0] for before_env in interaction_example['before_env_str']] # batch_size
+        initial_env_str = interaction_example['initial_env_str']
         whole_instruction_mask = interaction_example['whole_instruction_mask']
         num_instruction = whole_instruction.size(1)
 
@@ -452,7 +453,8 @@ class SeqToSeqModel(nn.Module):
             instruction_example = {
                 'whole_instruction': whole_instruction[:, i, :],
                 'before_env_str': before_env_str,
-                'whole_instruction_mask': whole_instruction_mask[:, i, :]
+                'whole_instruction_mask': whole_instruction_mask[:, i, :],
+                'initial_env_str': initial_env_str
             }
             decoder_outputs, world_states_str, attn_weights, state_attn_weights = self.predict_instruction(instruction_example)
             before_env_str = world_states_str

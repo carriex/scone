@@ -15,7 +15,7 @@ import pandas as pd
 from sklearn.metrics import accuracy_score
 from collections import OrderedDict
 from model import SeqToSeqModel
-from dataloader import AlchemyInstructionDataset, AlchemyInteractionDataset, collate_fn
+from dataloader import AlchemyInstructionDataset, collate_fn
 from argparse import ArgumentParser
 
 
@@ -318,9 +318,12 @@ class AlchemySolver(pl.LightningModule):
                                           action_word_to_idx=self.train_dataset.action_word_to_idx,
                                           state_to_idx=self.train_dataset.state_to_idx,
                                           max_instruction_length=self.train_dataset.max_instruction_length,
-                                          max_whole_instruction_length=self.train_dataset.max_whole_instruction_length)
+                                          max_whole_instruction_length=self.train_dataset.max_whole_instruction_length,
+                                          max_beaker_state_length=self.train_dataset.max_beaker_state_length)
 
-        self.test_interaction_dataset = AlchemyInteractionDataset(self.hparams.test_data,
+
+        self.test_interaction_dataset = AlchemyInstructionDataset(self.hparams.test_data,
+                                          is_interaction_dataset=True,
                                           word_to_idx=self.train_dataset.word_to_idx,
                                           action_to_idx=self.train_dataset.action_to_idx,
                                           action_word_to_idx=self.train_dataset.action_word_to_idx,
