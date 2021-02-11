@@ -4,17 +4,7 @@ from fsa import ExecutionFSA, EOS, ACTION_SEP, NO_ARG
 # Alchemy-specific methods.
 
 COLORS = ['y', 'o', 'r', 'g', 'b', 'p']
-COLOR_TO_WORDS = {
-    'y': 'yellow',
-    'o': 'orange',
-    'r': 'red',
-    'g': 'green',
-    'b': 'blue',
-    'p': 'purple',
-    '_': 'empty'
-}
 EMPTY_SYMBOL = '_'
-# random starter state
 STARTER_STATE = '1:yy 2:ooo 3:b 4:yy 5:gggg 6:rrr 7:pp'
 NUM_BEAKER = 7
 ACTION_POP = 'pop'
