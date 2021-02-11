@@ -3,8 +3,10 @@ Dataset creation for both instruction dataset and interaction dataset
 """
 import torch
 import json
-from alchemy_fsa import AlchemyFSA, COLORS, EMPTY_SYMBOL, NUM_BEAKER, STARTER_STATE
+from alchemy_fsa import AlchemyFSA, COLORS, EMPTY_SYMBOL, NUM_BEAKER, STARTER_STATE, COLOR_TO_WORDS
 from alchemy_world_state import AlchemyWorldState
+from num2words import num2words
+import re
 
 def collate_fn(data):
     """
@@ -43,7 +45,6 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         self.max_state_length = 0
         self.max_whole_instruction_length = 0
         self.max_beaker_state_length = 0
-        # self.word_to_idx = {}
         self.word_to_idx = {'SEP_PREV':0, 'SEP_CURR':1}
         self.action_to_idx = {}
         self.action_word_to_idx = {}
@@ -105,23 +106,23 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                         before_env(String): world state string before the action
                         after_env(Sting): world state string after the action
                 '''
-        identifier, instruction_str, actions_str, action_words, \
-        before_env_str, after_env_str, initial_env_str, init_states, whole_instruction = self.instruction_examples[idx]
+        identifier, instruction_str, actions_str, \
+        action_words, before_env_str, after_env_str, initial_env_str, init_states, whole_instruction = self.instruction_examples[idx]
 
         actions_str = self._preprocess_actions_str(actions_str)
         # encode instruction and action
         instruction, instruction_mask = self._encode_and_pad_instruction(instruction_str)
-        actions = self._encode_and_pad_action(actions_str)
+        # actions = self._encode_and_pad_action(actions_str)
         action_words = self._encode_and_pad_action_word(action_words)
         action_labels = self._encode_and_pad_action_labels(actions_str)
         init_states = torch.stack([self.encode_and_pad_beaker_state(state) for state in init_states])
-        whole_instruction, whole_instruction_mask = self._encode_and_pad_whole_instruction(whole_instruction)
+        whole_instruction_encoded, whole_instruction_mask = self._encode_and_pad_whole_instruction(whole_instruction)
         return {
             'identifier': identifier,
             'instruction': instruction,
             'instruction_mask': instruction_mask,
             'instruction_str': instruction_str,
-            'actions': actions,
+            # 'actions': actions,
             'action_words': action_words,
             'action_word_labels': action_words,
             'action_labels': action_labels,
@@ -130,7 +131,8 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
             'after_env_str': after_env_str,
             'initial_env_str': initial_env_str,
             'init_states': init_states,
-            'whole_instruction': whole_instruction,
+            'whole_instruction_str': whole_instruction,
+            'whole_instruction': whole_instruction_encoded,
             'whole_instruction_mask': whole_instruction_mask
         }
 
@@ -221,15 +223,24 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
     def _preprocess_actions_str(self, actions_str):
         processed_actions_str = []
         for actions in actions_str:
-            if 'pop' in actions:
-                actions += ' _NONE'
-            processed_actions_str.append(actions)
+            actions = actions.split(' ')
+            action_word = actions[0]
+            if action_word == 'pop':
+                actions.append('_NONE')
+            processed_actions_str.append(' '.join(actions))
         return processed_actions_str
 
     def preprocess_world_state_str(self, world_state_str):
+        # this step takes a while
         states = []
         for state in world_state_str.split(" "):
-            states.append(state)
+            processed_state = []
+            beaker_idx, beaker_content = state.split(":")
+            processed_state.append(num2words(beaker_idx, to='ordinal'))
+            processed_state.append('beaker')
+            for content in beaker_content:
+                processed_state.append(COLOR_TO_WORDS[content])
+            states.append(' '.join(processed_state))
         return states
 
     def _encode_state(self, state_string):
@@ -284,12 +295,11 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         return torch.tensor(indexes)
 
     def encode_and_pad_beaker_state(self, world_state_str):
-        world_state_str = world_state_str.replace(" ", "")
         indexes = []
-        for state in world_state_str:
-            indexes.append(self.state_to_idx[state])
-        indexes.append(self.state_to_idx['_EOS'])
-        indexes = self._pad_sequence(indexes, self.max_beaker_state_length, self.state_to_idx['_PAD'],
+        for state in world_state_str.split():
+            indexes.append(self.word_to_idx[state])
+        indexes.append(self.word_to_idx['_EOS'])
+        indexes = self._pad_sequence(indexes, self.max_beaker_state_length, self.word_to_idx['_PAD'],
                                      pad_start=False)
         return torch.tensor(indexes)
 
@@ -359,6 +369,19 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                     self.action_word_to_idx[action_word] = len(self.action_word_to_idx)
         self._add_supplementary_tokens(self.action_word_to_idx)
 
+    def _preprocess_instruction_str(self, instruction_str):
+        instruction_str = re.sub(r'[^\w\s]', '', instruction_str)
+        processed_words = []
+        for word in instruction_str.split():
+            if word.isdigit():
+                processed_words.append(num2words(word))
+            elif re.findall('\d+', word):
+                processed_words.append(num2words(re.findall('\d+', word)[0], to='ordinal'))
+            else:
+                processed_words.append(word)
+        return ' '.join(processed_words)
+
+
     def _load_data_and_word_encoding(self, filename):
         """Loads the data from the JSON files.
         Inputs:
@@ -390,6 +413,7 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                             whole_instruction += example[1] + ' SEP_PREV '
                         else:
                             whole_instruction += example[1] + ' SEP_CURR '
+                    instruction = self._preprocess_instruction_str(instruction)
                     whole_instruction += instruction
                     if len(actions) > self.max_action_length:
                         self.max_action_length = len(actions)
@@ -406,12 +430,18 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                     for state in states:
                         if len(state) > self.max_beaker_state_length:
                             self.max_beaker_state_length = len(state)
+                        # use word idx instead of state
+                        for word in state.split():
+                            if word not in self.word_to_idx:
+                                self.word_to_idx[word] = len(self.word_to_idx)
+                                self.vocab_size += 1
                     for word in instruction.split():
                         if word not in self.word_to_idx:
                             self.word_to_idx[word] = len(self.word_to_idx)
                             self.vocab_size += 1
                     examples.append(['{}-{}'.format(identifier, i), instruction, actions, action_words,
-                                     before_env, after_env, initial_env_str, states, whole_instruction])
+                                     before_env, after_env, initial_env_str,
+                                     states, whole_instruction])
                 interactions_examples.append({
                     'identifier': identifier,
                     'instructions': examples,
