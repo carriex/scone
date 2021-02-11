@@ -21,10 +21,8 @@ class Attention(nn.Module):
         """
         Returns context vector and attention weights
         """
-        # attention head
-        #
+        # first attention head
         attention = self.attn(query)
-        #
         attention = torch.bmm(attention, context_vecs.transpose(1, 2))
         if context_mask is not None:
             attention.data.masked_fill_(context_mask, -float('inf'))
@@ -37,7 +35,7 @@ class Attention(nn.Module):
 
 
 class EncoderRNN(nn.Module):
-    def __init__(self, embedding_layer, hidden_size, num_layers=1,
+    def __init__(self, input_size, hidden_size, num_layers=1,
                  use_bidirectional=True):
         """
         Bi-directional LSTM Encoder for instruction
@@ -45,9 +43,9 @@ class EncoderRNN(nn.Module):
         super(EncoderRNN, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        self.embedding = embedding_layer
+        self.embedding = nn.Embedding(input_size, hidden_size)
 
-        self.rnn = nn.LSTM(embedding_layer.embedding_dim, hidden_size, num_layers=num_layers, batch_first=True,
+        self.rnn = nn.LSTM(hidden_size, hidden_size, num_layers=num_layers, batch_first=True,
                            bidirectional=use_bidirectional)
 
         self.num_direction = 2 if use_bidirectional else 1
@@ -98,7 +96,7 @@ class DecoderRNN(nn.Module):
                                        context_dim=hidden_size)
             self.attn_combine = nn.Linear((self.hidden_size + hidden_size * 2) + self.hidden_size, self.hidden_size)
         # --------------------------------------- #
-        self.rnn = nn.LSTM(self.hidden_size, self.hidden_size, num_layers=num_layers, batch_first=True, dropout=0.2) # todo: remove drop out?
+        self.rnn = nn.LSTM(self.hidden_size, self.hidden_size, num_layers=num_layers, batch_first=True, dropout=0.2)
         self.out = nn.Linear(self.hidden_size, output_size)
         self.softmax = nn.LogSoftmax(dim=1)
 
@@ -145,7 +143,7 @@ class SeqToSeqModel(nn.Module):
     A Sequence to Sequence model which predicts a sequence of output tokens given a sequence of input
     """
     def __init__(self, instruction_input_size,
-                 word_embedding_size, # state_input_size,
+                 state_input_size,
                  hidden_size,
                  output_size,
                  max_encoder_length,
@@ -175,12 +173,9 @@ class SeqToSeqModel(nn.Module):
         self.vocab = vocab
 
         # -------------- network -------------- #
-        self.word_embedding = nn.Embedding(instruction_input_size, word_embedding_size)
-        # self.instruction_encoder = EncoderRNN(instruction_input_size, hidden_size, 1)
-        self.instruction_encoder = EncoderRNN(self.word_embedding, hidden_size)
-        # self.state_encoder = EncoderRNN(self.word_embedding, hidden_size, use_bidirectional=False) # this is not used
-        # self.state_beaker_encoder = EncoderRNN(state_input_size, hidden_size, use_bidirectional=False)
-        self.state_beaker_encoder = EncoderRNN(self.word_embedding, hidden_size, num_layers=1, use_bidirectional=False)
+        self.instruction_encoder = EncoderRNN(instruction_input_size, hidden_size, 1)
+        self.state_encoder = EncoderRNN(state_input_size, hidden_size, use_bidirectional=False)
+        self.state_beaker_encoder = EncoderRNN(state_input_size, hidden_size, use_bidirectional=False)
         self.action_decoder = DecoderRNN(hidden_size, output_size, self.max_encoder_length, 20, use_attention)
         self.hidden_size = hidden_size
         self.output_size = output_size
@@ -231,7 +226,7 @@ class SeqToSeqModel(nn.Module):
 
     def _encode_beaker_state(self, world_states_strs):
         """
-        Encode a batch of beaker state strings using a RNN
+        Encode a batch of beaker state strings
         Inputs:
             world_states_strs(String): Batch of List of String representing beaker state
         Outputs:
@@ -355,7 +350,7 @@ class SeqToSeqModel(nn.Module):
         instruction = batch_inputs['whole_instruction']
         # instruction_mask = batch_inputs['instruction_mask']
         instruction_mask = batch_inputs['whole_instruction_mask']
-        # actions = batch_inputs['actions']
+        actions = batch_inputs['actions']
         action_words = batch_inputs['action_words']
         actions_str = batch_inputs['actions_str']
         before_env_str = batch_inputs['before_env_str']

@@ -27,20 +27,6 @@ def seed_everything(seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-class LearningRateCallBack(pl.Callback):
-    '''Call back function for checking learning rate'''
-    def on_init_start(self, trainer):
-        print('Starting to init trainer!')
-    def on_epoch_end(self, trainer, pl_module):
-        if trainer.lr_schedulers:
-            for scheduler in trainer.lr_schedulers:
-                opt = scheduler['scheduler'].optimizer
-                param_groups = opt.param_groups
-                for param_group in param_groups:
-                    print("--------------------------LR: ", param_group.get('lr'),
-                          '------------------------------------------------------')
-
-
 
 class AlchemySolver(pl.LightningModule):
     def __init__(self, hparams):
@@ -60,8 +46,7 @@ class AlchemySolver(pl.LightningModule):
         # model
         self.model = SeqToSeqModel(
             instruction_input_size=len(self.train_dataset.word_to_idx),
-            word_embedding_size=self.hparams.word_embedding_size,
-            # state_input_size=len(self.train_dataset.state_to_idx),
+            state_input_size=len(self.train_dataset.state_to_idx),
             hidden_size=self.hparams.hidden_size,
             # max_encoder_length=self.train_dataset.max_instruction_length,
             max_encoder_length=self.train_dataset.max_whole_instruction_length,
@@ -165,7 +150,7 @@ class AlchemySolver(pl.LightningModule):
         # return values
         tqdm_dict = {
             'training_loss': loss,
-            'training_accuracy': world_state_accuracy,
+            'training_accuracy': world_state_accuracy
         }
         output = OrderedDict({
             'loss': loss,
@@ -183,10 +168,7 @@ class AlchemySolver(pl.LightningModule):
                                                num_workers=self.hparams.num_worker)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hparams.lr)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
-        return [optimizer], [scheduler]
-
+        return torch.optim.Adam(self.model.parameters(), lr=self.hparams.lr)
 
     def _print_sample(self, batch, decoded_actions, attn_weights, state_attn_weights, sample_idx):
         """print out samples and predictions"""
@@ -199,13 +181,11 @@ class AlchemySolver(pl.LightningModule):
         print("Predicted actions:",
               [self.train_dataset.idx_to_action_words[idx] for idx in predict_labels.cpu().numpy()[sample_idx]])
         if state_attn_weights is not None:
-            # batch_size x 22(?) x 1 x num_state
             state_attn_weights = state_attn_weights[-1]
             state_weight_idx = torch.argsort(state_attn_weights[sample_idx], descending=True).cpu().numpy()
             print("State weights rank:", state_weight_idx+1)
             print("State weights:", state_attn_weights[sample_idx].squeeze()[state_weight_idx].cpu().detach().numpy())
         if attn_weights is not None:
-            # batch_size x 22(?) x 1 x num_instruction
             attn_weights = attn_weights[-1]
             mask_idx = batch['whole_instruction_mask'][sample_idx]
             attn_weight = attn_weights[sample_idx].squeeze()
@@ -253,8 +233,7 @@ class AlchemySolver(pl.LightningModule):
         avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         avg_acc = torch.stack([x['val_acc'] for x in outputs]).mean()
         tqdm_dict = {'val_loss': avg_loss,
-                     'val_acc': avg_acc
-                     }
+                     'val_acc': avg_acc}
         return {'val_loss': avg_loss,
                 'val_acc': avg_acc,
                 'log': tqdm_dict,
@@ -399,7 +378,7 @@ def main():
                           dest="num_layers", type=int, default=1)
     argparse.add_argument("--teacher_forcing_ratio",
                           help="teacher forcing ratio",
-                          dest="teacher_forcing_ratio", type=float, default=1) # todo: change to 0.5?
+                          dest="teacher_forcing_ratio", type=float, default=1)
     argparse.add_argument("--num_epoches",
                           help="number of training epoches",
                           dest="num_epoches", type=int, default=100)
@@ -428,11 +407,6 @@ def main():
                           help="use only a certain percentage of data to run",
                           dest="percent_check",
                           type=float, default=0.0)
-    argparse.add_argument("-w", "--word_embedding_size",
-                          help="word embedding size",
-                          dest="word_embedding_size",
-                          type=int, default=100)
-
 
     seed_everything(88888)
     args = argparse.parse_args()
@@ -456,9 +430,7 @@ def main():
                          check_val_every_n_epoch=1,
                          logger=use_logger,
                          checkpoint_callback=use_checkpoint_callback,
-                         overfit_pct=args.percent_check,
-                         early_stop_callback=pl.callbacks.EarlyStopping('val_loss', patience=20),
-                         callbacks=[LearningRateCallBack()]
+                         overfit_pct=args.percent_check
                          )
 
     if not args.run_test:
