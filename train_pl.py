@@ -430,7 +430,8 @@ def main():
                          check_val_every_n_epoch=1,
                          logger=use_logger,
                          checkpoint_callback=use_checkpoint_callback,
-                         overfit_pct=args.percent_check
+                         overfit_pct=args.percent_check,
+                         callbacks=[LearningRateCallBack()]
                          )
 
     if not args.run_test:
