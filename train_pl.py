@@ -191,26 +191,28 @@ class AlchemySolver(pl.LightningModule):
         _, predict_labels = decoded_actions.max(2)
         print(">>>Idx {} Before env: ".format(batch['identifier'][sample_idx]), batch['before_env_str'][sample_idx])
         print("Instruction:",
-              [self.train_dataset.idx_to_word[idx] for idx in batch['whole_instruction'].cpu().numpy()[sample_idx]])
+              [self.train_dataset.idx_to_word[idx] for idx in batch['instruction'].cpu().numpy()[sample_idx]])
+        # print("Instruction:",
+        #       [self.train_dataset.idx_to_word[idx] for idx in batch['whole_instruction'].cpu().numpy()[sample_idx]])
         print("Action words:",
         [self.train_dataset.idx_to_action_words[idx] for idx in batch['action_words'].cpu().numpy()[sample_idx]])
         print("Predicted actions:",
               [self.train_dataset.idx_to_action_words[idx] for idx in predict_labels.cpu().numpy()[sample_idx]])
-        if state_attn_weights is not None:
-            state_attn_weights = state_attn_weights[-1]
-            state_weight_idx = torch.argsort(state_attn_weights[sample_idx], descending=True).cpu().numpy()
-            print("State weights rank:", state_weight_idx+1)
-            print("State weights:", state_attn_weights[sample_idx].squeeze()[state_weight_idx].cpu().detach().numpy())
-        if attn_weights is not None:
-            attn_weights = attn_weights[-1]
-            mask_idx = batch['whole_instruction_mask'][sample_idx]
-            attn_weight = attn_weights[sample_idx].squeeze()
-            weights_idx = torch.argsort(attn_weight[~mask_idx], descending=True).cpu().numpy()
-            words_idx = batch['whole_instruction'].cpu().numpy()[sample_idx][weights_idx]
-            print("Attention words:",
-                  [self.train_dataset.idx_to_word[idx] for idx in words_idx])
-            print("Attention weights:",
-                  attn_weight[weights_idx].detach().cpu().numpy())
+        # if state_attn_weights is not None:
+        #     state_attn_weights = state_attn_weights[-1]
+        #     state_weight_idx = torch.argsort(state_attn_weights[sample_idx], descending=True).cpu().numpy()
+        #     print("State weights rank:", state_weight_idx+1)
+        #     print("State weights:", state_attn_weights[sample_idx].squeeze()[state_weight_idx].cpu().detach().numpy())
+        # if attn_weights is not None:
+        #     attn_weights = attn_weights[-1]
+        #     mask_idx = batch['whole_instruction_mask'][sample_idx]
+        #     attn_weight = attn_weights[sample_idx].squeeze()
+        #     weights_idx = torch.argsort(attn_weight[~mask_idx], descending=True).cpu().numpy()
+        #     words_idx = batch['whole_instruction'].cpu().numpy()[sample_idx][weights_idx]
+        #     print("Attention words:",
+        #           [self.train_dataset.idx_to_word[idx] for idx in words_idx])
+        #     print("Attention weights:",
+        #           attn_weight[weights_idx].detach().cpu().numpy())
 
     def validation_step(self, batch, batch_idx):
         # forward
