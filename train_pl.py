@@ -86,7 +86,8 @@ class AlchemySolver(pl.LightningModule):
 
         # dict to store test results
         self.test_instruction_results = OrderedDict({'id': [],
-                                         'final_world_state': []})
+                                         'final_world_state': [],
+                                         'predicted actions': []})
 
         self.test_interaction_results = OrderedDict({'id': [],
                                          'final_world_state': []})
@@ -265,13 +266,18 @@ class AlchemySolver(pl.LightningModule):
         # instruction prediction
         if dataset_idx == 0:
             decoded_actions, world_states, attn_weights, state_attn_weights = self.model.predict_instruction(batch)
-            for idx in range(len(batch)):
+            _, predict_labels = decoded_actions.max(2)
+            predicted_actions = []
+            for idx in range(self.hparams.test_batch_size):
                 try:
                     self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, idx)
+                    predicted_actions.append([self.train_dataset.idx_to_action_words[i]
+                                                                   for i in predict_labels.cpu().numpy()[idx]])
                 except IndexError:
                     print(idx, " index error")
             self.test_instruction_results['id'] += batch['identifier']
             self.test_instruction_results['final_world_state'] += world_states
+            self.test_instruction_results['predicted actions'] += predicted_actions
 
         # interaction prediction
         else:
@@ -290,7 +296,8 @@ class AlchemySolver(pl.LightningModule):
     def _get_test_accuracy(self, prediction_csv_file, label_csv_file):
         pred = pd.read_csv(prediction_csv_file, index_col="id")
         labels = pd.read_csv(label_csv_file, index_col="id")
-        pred.columns = ["predicted"]
+        # pred["final_world_state"] = ["predicted"]
+        pred = pred.rename(columns={"final_world_state": "predicted", "predicted actions": "predicted_actions"})
         labels.columns = ["actual"]
         data = labels.join(pred)
         return accuracy_score(data.actual, data.predicted)
@@ -298,19 +305,19 @@ class AlchemySolver(pl.LightningModule):
     def test_epoch_end(self, outputs):
         # save dev result to csv
         # instruction
+        print([(key, len(value)) for key, value in self.test_instruction_results.items()])
+        print([(key, value[0]) for key, value in self.test_instruction_results.items()])
         df_instruction = pd.DataFrame.from_dict(self.test_instruction_results)
         instruction_pred_name = '{}-instruction.csv'.format(self.hparams.test_result)
         df_instruction.to_csv(instruction_pred_name, index=False)
         print("Test instruction output saved at {}".format(instruction_pred_name))
         instruction_acc = self._get_test_accuracy(instruction_pred_name, self.hparams.test_instruction_label)
-        # instruction_acc = 0.0
         # interaction
         df_interaction = pd.DataFrame.from_dict(self.test_interaction_results)
         interaction_pred_name = '{}-interaction.csv'.format(self.hparams.test_result)
         df_interaction.to_csv(interaction_pred_name, index=False)
         print("Test interaction output saved at {}".format(interaction_pred_name))
         interaction_acc = self._get_test_accuracy(interaction_pred_name, self.hparams.test_interaction_label)
-        # interaction_acc = 0.0
 
         ###########  output ##############
         output = OrderedDict({
