@@ -27,6 +27,19 @@ def seed_everything(seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
+class LearningRateCallBack(pl.Callback):
+    '''Call back function for checking learning rate'''
+    def on_init_start(self, trainer):
+        print('Starting to init trainer!')
+    def on_epoch_end(self, trainer, pl_module):
+        if trainer.lr_schedulers:
+            for scheduler in trainer.lr_schedulers:
+                opt = scheduler['scheduler'].optimizer
+                param_groups = opt.param_groups
+                for param_group in param_groups:
+                    print("--------------------------LR: ", param_group.get('lr'),
+                          '------------------------------------------------------')
+
 
 class AlchemySolver(pl.LightningModule):
     def __init__(self, hparams):
@@ -168,7 +181,9 @@ class AlchemySolver(pl.LightningModule):
                                                num_workers=self.hparams.num_worker)
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.model.parameters(), lr=self.hparams.lr)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hparams.lr)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+        return [optimizer], [scheduler]
 
     def _print_sample(self, batch, decoded_actions, attn_weights, state_attn_weights, sample_idx):
         """print out samples and predictions"""
@@ -349,8 +364,8 @@ class AlchemySolver(pl.LightningModule):
 def main():
     # A few command line arguments
     argparse = ArgumentParser()
-    argparse.add_argument("--train_data", dest="train_data", default='data/train.json')
-    argparse.add_argument("--val_data", dest="val_data", default='data/dev.json')
+    argparse.add_argument("--train_data", dest="train_data", default='data/train_sequences.json')
+    argparse.add_argument("--val_data", dest="val_data", default='data/dev_sequences.json')
     argparse.add_argument("--test_data", dest="test_data", default='/home/ec2-user/nlp/scone/data/alchemy/test_sequences.json')
     argparse.add_argument("--test_interaction_label", dest="test_interaction_label",
                           default='/home/ec2-user/nlp/scone/data/alchemy/test_interaction_y.csv')
