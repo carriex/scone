@@ -54,9 +54,13 @@ class EncoderRNN(nn.Module):
 
         self.num_direction = 2 if use_bidirectional else 1
 
-    def forward(self, input, hidden):
+    def forward(self, input, hidden, gpu_index):
         # shape: batch x seq x feature
         input = input.view(-1, 1)
+        ### move tensor to GPU ###
+        if torch.cuda.is_available():
+            input = input.cuda(gpu_index)
+        ###########################
         embedded = self.embedding(input)
         output = embedded
         output, hidden = self.rnn(output, hidden)
@@ -115,7 +119,7 @@ class DecoderRNN(nn.Module):
         # shape: batch x seq x feature
         input = input.view(-1, 1)
         embedded = self.embedding(input)
-        attn_weights = None
+        encoder_attn_weights = None
         state_attn_weights = None
 
         # -------------- attention -------------- #
@@ -126,39 +130,22 @@ class DecoderRNN(nn.Module):
             # state, state_attn_weights = self.state_attention(query=hidden_state,
             #                        context_vecs=state)
             # Use mutlihead attention
-            encoder_attn_outputs = []
-            encoder_attn_weights = []
-            state_attn_outputs = []
-            state_attn_weights= []
-            for layer_idx in range(hidden_state.shape[1]):
-                one_layer_hidden_state = hidden_state[:, [layer_idx], :]
-                encoder_attn_output, encoder_attn_weight = self.encoder_attention(query=one_layer_hidden_state,
-                                                                                   key=encoder_states,
-                                                                                   value=encoder_states)
-                # (batch, hidden_size)
-                state_attn_output, state_attn_weight = self.state_attention(query=one_layer_hidden_state,
-                                                                             key=state,
-                                                                             value=state)
-                encoder_attn_outputs.append(encoder_attn_output)
-                encoder_attn_weights.append(encoder_attn_weight)
-                state_attn_outputs.append(state_attn_output)
-                state_attn_weights.append(state_attn_weight)
-            # init_state, init_state_attn_weights = self.init_state_attention(query=hidden_state,
-            #                                                  context_vecs=init_state)
-            # TODO: update shape
-            # hidden_state = torch.cat((hidden_state, context, state, init_state), dim=2)
-            encoder_attn_outputs = torch.cat(encoder_attn_outputs, dim=1)
-            state_attn_outputs = torch.cat(state_attn_outputs, dim=1)
-            attn_weights = torch.cat(encoder_attn_weights, dim=1)
-            state_attn_weights = torch.cat(state_attn_weights, dim=1)
-            hidden_state = torch.cat((hidden_state, encoder_attn_outputs, state_attn_outputs), dim=2)
+            encoder_attn_outputs, encoder_attn_weights = self.encoder_attention(query=hidden_state.transpose(0, 1),
+                                                                               key=encoder_states.transpose(0, 1),
+                                                                               value=encoder_states.transpose(0, 1),
+                                                                               key_padding_mask=instruction_mask.squeeze())
+            # (batch, hidden_size)
+            state_attn_outputs, state_attn_weights = self.state_attention(query=hidden_state.transpose(0, 1),
+                                                                         key=state.transpose(0, 1),
+                                                                         value=state.transpose(0, 1),)
+            hidden_state = torch.cat((hidden_state.transpose(0, 1),
+                                      encoder_attn_outputs, state_attn_outputs), dim=2)
             hidden_state = nn.ReLU()(self.attn_combine(hidden_state))
-            hidden = (hidden_state.transpose(0, 1).contiguous(), hidden[1])
+            hidden = (hidden_state.contiguous(), hidden[1])
         # --------------------------------------- #
-
         output, hidden = self.rnn(embedded, hidden)
         output = self.softmax(self.out(output.squeeze()))
-        return output, hidden, attn_weights, context_vector, state_attn_weights
+        return output, hidden, encoder_attn_weights, context_vector, state_attn_weights
 
     def initHidden(self, batch_size, gpu_idx):
         hidden_state = torch.zeros(self.num_layers, batch_size, self.hidden_size)
@@ -234,7 +221,7 @@ class SeqToSeqModel(nn.Module):
                                                   self.instruction_encoder.hidden_size * self.instruction_encoder.num_direction)
         for idx in range(input_seq.size(1)):
             instruction_encoder_output, instruction_encoder_hidden = self.instruction_encoder(
-                input_seq[:, idx], instruction_encoder_hidden
+                input_seq[:, idx], instruction_encoder_hidden, self.gpu_index
             )
             instruction_encoder_states[:, idx, :] = torch.cat((instruction_encoder_hidden[0][0],
                                                                instruction_encoder_hidden[0][1]), dim=1)
@@ -258,7 +245,7 @@ class SeqToSeqModel(nn.Module):
         ###########################
         for idx in range(self.vocab.max_state_length):
             state_encoder_output, state_encoder_hidden = self.state_encoder(
-                batch_state[:, idx], state_encoder_hidden
+                batch_state[:, idx], state_encoder_hidden, self.gpu_index
             )
         return state_encoder_hidden[0].transpose(0, 1)
 
@@ -283,7 +270,7 @@ class SeqToSeqModel(nn.Module):
             ###########################
             for idx in range(self.vocab.max_beaker_state_length):
                 state_encoder_output, state_encoder_hidden = self.state_beaker_encoder(
-                    batch_state[:, idx], state_encoder_hidden
+                    batch_state[:, idx], state_encoder_hidden, self.gpu_index
                 )
             beaker_state_encoding.append(state_encoder_hidden[0])
         return torch.cat(beaker_state_encoding, dim=0).transpose(0, 1)

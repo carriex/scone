@@ -182,8 +182,8 @@ class AlchemySolver(pl.LightningModule):
                                                num_workers=self.hparams.num_worker)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hparams.lr)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.hparams.lr)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=40)
         return [optimizer], [scheduler]
 
     def _print_sample(self, batch, decoded_actions, attn_weights, state_attn_weights, sample_idx):
@@ -384,19 +384,19 @@ def main():
                           default='results/test_pred')
     argparse.add_argument("--train_batch_size",
                           help="training batch size",
-                          dest="train_batch_size", type=int, default=16)
+                          dest="train_batch_size", type=int, default=64)
     argparse.add_argument("--test_batch_size",
                           help="testing batch size",
-                          dest="test_batch_size", type=int, default=16)
+                          dest="test_batch_size", type=int, default=64)
     argparse.add_argument("--val_batch_size",
                           help="validation batch size",
-                          dest="val_batch_size", type=int, default=16)
+                          dest="val_batch_size", type=int, default=64)
     argparse.add_argument("--num_worker",
                           help="number of worker for dataloader",
-                          dest="num_worker", type=int, default=4)
+                          dest="num_worker", type=int, default=10)
     argparse.add_argument("--hidden_size",
                           help="size of the hidden layer of RNN",
-                          dest="hidden_size", type=int, default=100)
+                          dest="hidden_size", type=int, default=128)
     argparse.add_argument("--num_layers",
                           help="number of layers of the RNN",
                           dest="num_layers", type=int, default=1)
@@ -405,7 +405,7 @@ def main():
                           dest="teacher_forcing_ratio", type=float, default=1)
     argparse.add_argument("--num_epoches",
                           help="number of training epoches",
-                          dest="num_epoches", type=int, default=100)
+                          dest="num_epoches", type=int, default=200)
     argparse.add_argument("--lr",
                           help="initial learning rate",
                           dest="lr", type=float, default=1e-3)
