@@ -2,7 +2,6 @@
 
 from fsa import WorldState
 from alchemy_fsa import AlchemyFSA
-colors = ['y', 'o', 'r', 'g', 'b', 'p']
 
 # Immutable world state. Action execution returns a new state.
 class AlchemyWorldState(WorldState):

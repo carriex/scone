@@ -3,7 +3,7 @@ Dataset creation for both instruction dataset and interaction dataset
 """
 import torch
 import json
-from alchemy_fsa import AlchemyFSA, COLORS, EMPTY_SYMBOL, NUM_BEAKER, STARTER_STATE
+from alchemy_fsa import AlchemyFSA, COLORS, EMPTY_SYMBOL, NUM_BEAKER, STARTER_STATE, NUM_INSTRUCTION_PER_INTERACTION
 from alchemy_world_state import AlchemyWorldState
 
 def collate_fn(data):
@@ -46,7 +46,7 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         # self.word_to_idx = {}
         self.word_to_idx = {'SEP_PREV':0, 'SEP_CURR':1}
         self.action_to_idx = {}
-        self.action_word_to_idx = {}
+        self.action_word_to_idx = {'SEP': 0}
         self.state_to_idx = {}
         self.num_actions = 0
         self.num_word_actions = 0
@@ -106,37 +106,48 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                         after_env(Sting): world state string after the action
                 '''
         identifier, instruction_str, actions_str, action_words, \
-        before_env_str, after_env_str, initial_env_str, init_states, whole_instruction = self.instruction_examples[idx]
+        before_env_str, after_env_str, initial_env_str, init_state, \
+        whole_instruction, all_instructions, all_states = self.instruction_examples[idx]
 
         actions_str = self._preprocess_actions_str(actions_str)
         # encode instruction and action
         instruction, instruction_mask = self._encode_and_pad_instruction(instruction_str)
-        actions = self._encode_and_pad_action(actions_str)
+        # actions = self._encode_and_pad_action(actions_str)
         action_words = self._encode_and_pad_action_word(action_words)
-        action_labels = self._encode_and_pad_action_labels(actions_str)
-        init_states = torch.stack([self.encode_and_pad_beaker_state(state) for state in init_states])
+        # action_labels = self._encode_and_pad_action_labels(actions_str)
+        # turn states into matrix
+        # init_states = torch.stack([self.encode_and_pad_beaker_state(state) for state in init_states])
+        init_state = self.encode_beaker_state_into_matrix(init_state)
         whole_instruction, whole_instruction_mask = self._encode_and_pad_whole_instruction(whole_instruction)
+        # encode all instructions
+        all_instructions, all_instructions_mask = self._encode_and_pad_instruction_in_interaction(all_instructions)
+        # encode all states
+        all_states = self.encode_five_beaker_states_into_matrix(all_states)
         return {
             'identifier': identifier,
             'instruction': instruction,
             'instruction_mask': instruction_mask,
             'instruction_str': instruction_str,
-            'actions': actions,
+            # 'actions': actions,
             'action_words': action_words,
             'action_word_labels': action_words,
-            'action_labels': action_labels,
+            # 'action_labels': action_labels,
             'actions_str': actions_str,
             'before_env_str': before_env_str,
             'after_env_str': after_env_str,
             'initial_env_str': initial_env_str,
-            'init_states': init_states,
+            'init_state': init_state,
             'whole_instruction': whole_instruction,
-            'whole_instruction_mask': whole_instruction_mask
+            'whole_instruction_mask': whole_instruction_mask,
+            'up_to_this_instructions': all_instructions,
+            'up_to_this_instructions_mask': all_instructions_mask,
+            'up_to_this_states': all_states
         }
 
     def _get_interaction_item(self, idx):
         '''
         Return list of instruction examples (interaction)
+        TODO: align interaction item / instruction item
         '''
         identifier = self.interactions_examples[idx]['identifier']
         instruction_examples = self.interactions_examples[idx]['instructions']
@@ -155,7 +166,8 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
 
         for example in instruction_examples:
             instruction_identifier, instruction_str, actions_str, action_word, \
-            before_env_str, after_env_str, initial_env_str, init_state, whole_instruction = example
+            before_env_str, after_env_str, initial_env_str, init_state, whole_instruction, \
+            all_instructions, all_states = example  # TODO
 
             actions_str = self._preprocess_actions_str(actions_str)
             instruction, masked = self._encode_and_pad_instruction(instruction_str)
@@ -220,10 +232,14 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
 
     def _preprocess_actions_str(self, actions_str):
         processed_actions_str = []
-        for actions in actions_str:
+        for i, actions in enumerate(actions_str):
             if 'pop' in actions:
                 actions += ' _NONE'
             processed_actions_str.append(actions)
+            # Add a separating token between actions
+            if i < len(actions_str) - 1:
+                processed_actions_str.append('SEP')
+            #########################################
         return processed_actions_str
 
     def preprocess_world_state_str(self, world_state_str):
@@ -293,9 +309,29 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                                      pad_start=False)
         return torch.tensor(indexes)
 
+    def encode_beaker_state_into_matrix(self, world_state_str):
+        '''returns num_beakers x num_colors matrix representing a world state'''
+        num_colors = len(COLORS)
+        # initialize as 0
+        matrix = torch.zeros((self.num_beakers, num_colors))
+        for i, state_str in enumerate(world_state_str):
+            state = state_str.split(':')[-1]
+            for color in state:
+                if color == '_':
+                    continue
+                matrix[i][COLORS.index(color)] += 1
+        return matrix
+
+    def encode_five_beaker_states_into_matrix(self, list_of_states):
+        num_colors = len(COLORS)
+        matrix = torch.zeros((NUM_INSTRUCTION_PER_INTERACTION, self.num_beakers, num_colors))
+        for i, state in enumerate(list_of_states):
+            matrix[i] = self.encode_beaker_state_into_matrix(state)
+        return matrix
+
 
     def _encode_and_pad_instruction(self, instruction):
-        '''returns tensor of encoded instructions and corresponding masking array'''
+        '''returns tensor of encoded instruction and corresponding masking array'''
         indexes = []
         for word in instruction.split():
             if word in self.word_to_idx:
@@ -308,6 +344,19 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         masked_array = torch.cat((masked_true, masked_false), dim=0)
         indexes = self._pad_sequence(indexes, self.max_instruction_length, self.word_to_idx['_PAD'])
         return torch.tensor(indexes), masked_array
+
+    def _encode_and_pad_instruction_in_interaction(self, instructions):
+        '''
+        return tensor of encoded instructions (shape: 5 x max_len) and corresponding masking array
+        '''
+        encoded_instructions = torch.ones((NUM_INSTRUCTION_PER_INTERACTION, self.max_instruction_length)) \
+                               * self.word_to_idx['_PAD']
+        masking_array = torch.ones((NUM_INSTRUCTION_PER_INTERACTION, self.max_instruction_length))
+        for i, instruction in enumerate(instructions):
+            encoded_instruction, mask = self._encode_and_pad_instruction(instruction)
+            encoded_instructions[i] = encoded_instruction
+            masking_array[i] = mask
+        return encoded_instructions, masking_array
 
     def _encode_and_pad_whole_instruction(self, instruction):
         indexes = []
@@ -384,12 +433,20 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                     actions = utterance['actions']
                     action_words = [word for action in self._preprocess_actions_str(actions) for word in action.split()]
                     instruction = utterance['instruction']
+                    # separate beaker states
+                    states = self.preprocess_world_state_str(before_env)
                     whole_instruction = ''
+                    all_instructions = []
+                    all_states = []
                     for idx, example in enumerate(examples):
+                        all_instructions.append(example[1])
+                        all_states.append(states)
                         if idx < len(examples) -1:
                             whole_instruction += example[1] + ' SEP_PREV '
                         else:
                             whole_instruction += example[1] + ' SEP_CURR '
+                    all_instructions.append(instruction)
+                    all_states.append(states)
                     whole_instruction += instruction
                     if len(actions) > self.max_action_length:
                         self.max_action_length = len(actions)
@@ -401,8 +458,6 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                         self.max_whole_instruction_length = len(whole_instruction.split())
                     if len(after_env) > self.max_state_length:
                         self.max_state_length = len(after_env)
-                    # beaker states
-                    states = self.preprocess_world_state_str(before_env)
                     for state in states:
                         if len(state) > self.max_beaker_state_length:
                             self.max_beaker_state_length = len(state)
@@ -411,7 +466,7 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
                             self.word_to_idx[word] = len(self.word_to_idx)
                             self.vocab_size += 1
                     examples.append(['{}-{}'.format(identifier, i), instruction, actions, action_words,
-                                     before_env, after_env, initial_env_str, states, whole_instruction])
+                                     before_env, after_env, initial_env_str, states, whole_instruction, all_instructions, all_states])
                 interactions_examples.append({
                     'identifier': identifier,
                     'instructions': examples,

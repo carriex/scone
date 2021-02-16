@@ -6,7 +6,35 @@ import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
 from alchemy_world_state import AlchemyWorldState
+import alchemy_fsa
+
+
+class StateEncoder(nn.Module):
+    def __init__(self, embed_size):
+        """
+        MLP for encoding state
+        """
+        super(StateEncoder, self).__init__()
+        self.embed_size = embed_size
+        self.fc = nn.Linear(alchemy_fsa.NUM_BEAKER * len(alchemy_fsa.COLORS),
+                             self.embed_size*2)
+        self.bn0 = nn.BatchNorm1d(self.embed_size*2)
+        self.drop_out = nn.Dropout()
+        self.out = nn.Linear(self.embed_size*2, self.embed_size)
+        self.bn1 = nn.BatchNorm1d(self.embed_size)
+
+    def forward(self, state_matrix):
+        """
+        Input: (batch_size, num_beaker, num_colors)
+        Returns encoded states in the form of [batch_size, embed_size]
+        """
+        flatten_state = state_matrix.flatten(start_dim=1)
+        embedded = nn.ReLU()(self.bn0(self.fc(flatten_state)))
+        embedded = self.drop_out(embedded)
+        output = nn.ReLU()(self.bn1(self.out(embedded)))
+        return output
 
 
 class Attention(nn.Module):
@@ -46,19 +74,44 @@ class EncoderRNN(nn.Module):
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.embedding = nn.Embedding(input_size, hidden_size)
-
         self.rnn = nn.LSTM(input_size=hidden_size,
                            hidden_size=hidden_size,
                            num_layers=num_layers, batch_first=True,
                            bidirectional=use_bidirectional)
 
         self.num_direction = 2 if use_bidirectional else 1
+        # let's assume we only use bidirectional LSTM for now
+        # TODO: refactor
+        self.combine_state_layers = [
+            nn.Linear(self.hidden_size*2, self.hidden_size),
+            nn.Linear(self.hidden_size*2, self.hidden_size)
+        ]
 
-    def forward(self, input, hidden):
-        # shape: batch x seq x feature
-        input = input.view(-1, 1)
+
+    def forward(self, input, hidden, encoded_world_state, gpu_idx):
+        """
+        Encode one instruction and add encoded world_state to hidden state (concat -> transform)
+        """
+        # shape: batch x 1 x feature
+        input = input.view(-1, 1).to(torch.int64)
+        # shape : batch x 1 x self.hidden_size
         embedded = self.embedding(input)
         output = embedded
+        # add encoded state
+        # 2 x batch_size x hidden_size
+        hidden_state = hidden[0]
+        for i in range(hidden_state.size(0)):
+            one_hidden_state_layer = hidden_state[i, :, :]
+            ### move tensor to GPU ###
+            if torch.cuda.is_available():
+                one_hidden_state_layer = one_hidden_state_layer.cuda(gpu_idx)
+                encoded_world_state = encoded_world_state.cuda(gpu_idx)
+                self.combine_state_layers[i] = self.combine_state_layers[i].cuda(gpu_idx)
+            ###########################
+            hidden_state[i, :, :] = nn.ReLU()(self.combine_state_layers[i](
+                torch.cat((one_hidden_state_layer, encoded_world_state), dim=1)
+            ))
+        ####################################
         output, hidden = self.rnn(output, hidden)
         return output, hidden
 
@@ -98,12 +151,11 @@ class DecoderRNN(nn.Module):
             #                            context_dim=hidden_size)
             # Use multi-head attention
             self.encoder_attention = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=8)
-            self.state_attention = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=4)
+            # self.state_attention = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=4)
             # self.init_state_attention = Attention(query_dim=self.hidden_size,
             #                            context_dim=hidden_size)
             # TODO: update shape
-            # self.attn_combine = nn.Linear((self.hidden_size * 3) + self.hidden_size, self.hidden_size)
-            self.attn_combine = nn.Linear((self.hidden_size * 2) + self.hidden_size, self.hidden_size)
+            self.attn_combine = nn.Linear((self.hidden_size * 2), self.hidden_size)
         # --------------------------------------- #
         self.rnn = nn.LSTM(input_size=self.hidden_size,
                            hidden_size=self.hidden_size,
@@ -111,54 +163,39 @@ class DecoderRNN(nn.Module):
         self.out = nn.Linear(self.hidden_size, output_size)
         self.softmax = nn.LogSoftmax(dim=1)
 
-    def forward(self, input, hidden, state, init_state, encoder_states, instruction_mask, context_vector):
+    def forward(self, input, hidden,
+                encoded_world_state,
+                # instruction_mask,
+                up_to_this_instruction_encoder_hidden,
+                up_to_this_instruction_mask,
+                context_vector):
         # shape: batch x seq x feature
         input = input.view(-1, 1)
+        batch_size = input.size(0)
         embedded = self.embedding(input)
         attn_weights = None
         state_attn_weights = None
 
         # -------------- attention -------------- #
         if self.use_attention:
-            hidden_state = hidden[0].transpose(0, 1)
-            # context, attn_weights = self.attention(query=hidden_state,
-            #                        context_vecs=encoder_states, context_mask=instruction_mask)
-            # state, state_attn_weights = self.state_attention(query=hidden_state,
-            #                        context_vecs=state)
-            # Use mutlihead attention
-            encoder_attn_outputs = []
-            encoder_attn_weights = []
-            state_attn_outputs = []
-            state_attn_weights= []
-            for layer_idx in range(hidden_state.shape[1]):
-                one_layer_hidden_state = hidden_state[:, [layer_idx], :]
-                encoder_attn_output, encoder_attn_weight = self.encoder_attention(query=one_layer_hidden_state,
-                                                                                   key=encoder_states,
-                                                                                   value=encoder_states)
-                # (batch, hidden_size)
-                state_attn_output, state_attn_weight = self.state_attention(query=one_layer_hidden_state,
-                                                                             key=state,
-                                                                             value=state)
-                encoder_attn_outputs.append(encoder_attn_output)
-                encoder_attn_weights.append(encoder_attn_weight)
-                state_attn_outputs.append(state_attn_output)
-                state_attn_weights.append(state_attn_weight)
-            # init_state, init_state_attn_weights = self.init_state_attention(query=hidden_state,
-            #                                                  context_vecs=init_state)
-            # TODO: update shape
-            # hidden_state = torch.cat((hidden_state, context, state, init_state), dim=2)
-            encoder_attn_outputs = torch.cat(encoder_attn_outputs, dim=1)
-            state_attn_outputs = torch.cat(state_attn_outputs, dim=1)
-            attn_weights = torch.cat(encoder_attn_weights, dim=1)
-            state_attn_weights = torch.cat(state_attn_weights, dim=1)
-            hidden_state = torch.cat((hidden_state, encoder_attn_outputs, state_attn_outputs), dim=2)
+            # 20 x 32 x 256
+            hidden_state = hidden[0]
+            # 32 x 5 x 2 x 128 ->
+            # 5 x 32 x 256
+            up_to_this_instruction_encoder_hidden = up_to_this_instruction_encoder_hidden.transpose(0, 1).reshape(
+                                            alchemy_fsa.NUM_INSTRUCTION_PER_INTERACTION, batch_size, -1)
+            encoder_attn_outputs, encoder_attn_weights = self.encoder_attention(query=hidden_state,
+                                                                               key=up_to_this_instruction_encoder_hidden,
+                                                                               value=up_to_this_instruction_encoder_hidden)
+            # 20 x 32 x 256, 20 x 32 x 256
+            hidden_state = torch.cat((hidden_state, encoder_attn_outputs), dim=2)
             hidden_state = nn.ReLU()(self.attn_combine(hidden_state))
-            hidden = (hidden_state.transpose(0, 1).contiguous(), hidden[1])
+            hidden = (hidden_state.contiguous(), hidden[1])
         # --------------------------------------- #
 
         output, hidden = self.rnn(embedded, hidden)
         output = self.softmax(self.out(output.squeeze()))
-        return output, hidden, attn_weights, context_vector, state_attn_weights
+        return output, hidden, encoder_attn_weights, context_vector
 
     def initHidden(self, batch_size, gpu_idx):
         hidden_state = torch.zeros(self.num_layers, batch_size, self.hidden_size)
@@ -208,7 +245,7 @@ class SeqToSeqModel(nn.Module):
 
         # -------------- network -------------- #
         self.instruction_encoder = EncoderRNN(instruction_input_size, hidden_size)
-        self.state_encoder = EncoderRNN(state_input_size, hidden_size * 2, use_bidirectional=False)
+        self.state_encoder = StateEncoder(embed_size=hidden_size)
         self.state_beaker_encoder = EncoderRNN(state_input_size, hidden_size, use_bidirectional=False)
         self.action_decoder = DecoderRNN(hidden_size=hidden_size,
                                          output_size=output_size,
@@ -220,9 +257,10 @@ class SeqToSeqModel(nn.Module):
         self.gpu_index = None
 
 
-    def _encode_instructions(self, input_seq):
+    def _encode_instructions(self, input_seq, encoded_world_state):
         """
-        Encodes a batch of input sequence and returns the outputs for each encoder input and the last hidden state
+        Encodes a batch of input sequence with encoded initial world state (batch_size, self.hidden_size)
+        returns the hidden state for each encoder input and the last hidden state
         """
         batch_size = input_seq.size(0)
         # init encoder_hidden
@@ -234,7 +272,7 @@ class SeqToSeqModel(nn.Module):
                                                   self.instruction_encoder.hidden_size * self.instruction_encoder.num_direction)
         for idx in range(input_seq.size(1)):
             instruction_encoder_output, instruction_encoder_hidden = self.instruction_encoder(
-                input_seq[:, idx], instruction_encoder_hidden
+                input_seq[:, idx], instruction_encoder_hidden, encoded_world_state, self.gpu_index
             )
             instruction_encoder_states[:, idx, :] = torch.cat((instruction_encoder_hidden[0][0],
                                                                instruction_encoder_hidden[0][1]), dim=1)
@@ -288,40 +326,41 @@ class SeqToSeqModel(nn.Module):
             beaker_state_encoding.append(state_encoder_hidden[0])
         return torch.cat(beaker_state_encoding, dim=0).transpose(0, 1)
 
-    # def _encode_beakers_state(self, world_states_strs):
-    #     """
-    #     Encode a batch of beaker state strings
-    #     Inputs:
-    #         world_states_strs(String): Batch of List of String representing beaker state
-    #     Outputs:
-    #         embeddings(Tensor): embedding of the beaker states; shape: batch_size x state encoder hidden size
-    #     """
-    #     batch_size = len(world_states_strs)
-    #     batch_states = [self.vocab.preprocess_world_state_str(state_str) for state_str in world_states_strs]
-    #     # join beaker states into one string
-    #     # (batch_size, )
-    #     batch_states = " ".join(batch_states)
-    #     beaker_state_encoding = []
-    #     state_encoder_hidden = self.state_beaker_encoder.initHidden(batch_size, self.gpu_index)
-    #     batch_state = torch.stack(
-    #         [self.vocab.encode_and_pad_beaker_state(batch_states[idx]) for idx in range(batch_size)])
-    #     ### move tensor to GPU ###
-    #     if torch.cuda.is_available():
-    #         batch_state = batch_state.cuda(self.gpu_index)
-    #     ###########################
-    #     for idx in range(self.vocab.max_beaker_state_length):
-    #         state_encoder_output, state_encoder_hidden = self.state_beaker_encoder(
-    #             batch_state[idx], state_encoder_hidden
-    #         )
-    #     beaker_state_encoding.append(state_encoder_hidden[0])
-    #     return torch.cat(beaker_state_encoding, dim=0).transpose(0, 1)
+    def _encode_beakers_state(self, world_states_strs):
+        """
+        Encode a batch of beaker state strings
+        Inputs:
+            world_states_strs(String): Batch of List of String representing beaker state
+        Outputs:
+            embeddings(Tensor): embedding of the beaker states; shape: batch_size x state encoder hidden size
+        """
+        batch_size = len(world_states_strs)
+        batch_states = [self.vocab.preprocess_world_state_str(state_str) for state_str in world_states_strs]
+        # join beaker states into one string
+        # (batch_size, )
+        batch_states = " ".join(batch_states)
+        beaker_state_encoding = []
+        state_encoder_hidden = self.state_beaker_encoder.initHidden(batch_size, self.gpu_index)
+        batch_state = torch.stack(
+            [self.vocab.encode_and_pad_beaker_state(batch_states[idx]) for idx in range(batch_size)])
+        ### move tensor to GPU ###
+        if torch.cuda.is_available():
+            batch_state = batch_state.cuda(self.gpu_index)
+        ###########################
+        for idx in range(self.vocab.max_beaker_state_length):
+            state_encoder_output, state_encoder_hidden = self.state_beaker_encoder(
+                batch_state[idx], state_encoder_hidden
+            )
+        beaker_state_encoding.append(state_encoder_hidden[0])
+        return torch.cat(beaker_state_encoding, dim=0).transpose(0, 1)
 
     def _decode(self, instruction_encoder_hidden,
-                       encoder_states,
                        instruction_mask,
+                       encoded_world_state,
+                       up_to_this_instruction_encoder_hidden,
+                       up_to_this_instruction_mask,
+                       up_to_this_encoded_world_states,
                        world_states,
-                       batch_state_encoding,
-                       batch_init_state_encoding,
                        actions=None,
                        actions_str=None):
         """
@@ -333,7 +372,7 @@ class SeqToSeqModel(nn.Module):
         if actions is not None:
             use_teacher_forcing = True if random.random() < self.teacher_forcing_ratio else False
 
-        batch_size = len(world_states)
+        batch_size = instruction_mask.size(0)
         # shape: batch_size x 1 x hidden_size
         decoder_input = torch.tensor([[self.action_SOS_token] * batch_size]).view(batch_size, 1)
         # shape: batch_size x seq_len x output_size
@@ -345,12 +384,11 @@ class SeqToSeqModel(nn.Module):
                                            batch_size, self.action_decoder.hidden_size))
 
         context_vector = torch.zeros((batch_size, 1, self.instruction_encoder.hidden_size * 2))
-
         for i in range(self.action_decoder.num_layers):
-            decoder_hidden_states[i] = torch.cat((instruction_encoder_hidden[0][0],
-                                                  instruction_encoder_hidden[0][1]), dim=1).view(1, batch_size, -1)
-            decoder_cell_states[i] = torch.cat((instruction_encoder_hidden[1][0],
-                                                instruction_encoder_hidden[1][1]), dim=1).view(1, batch_size, -1)
+            decoder_hidden_states[i] = torch.cat((instruction_encoder_hidden[0][:, 0, :],
+                                                  instruction_encoder_hidden[0][:, 1, :]), dim=1).view(1, batch_size, -1)
+            decoder_cell_states[i] = torch.cat((instruction_encoder_hidden[1][:, 0, :],
+                                                instruction_encoder_hidden[1][:, 1, :]), dim=1).view(1, batch_size, -1)
 
         ### move tensor to GPU ###
         if torch.cuda.is_available():
@@ -368,14 +406,15 @@ class SeqToSeqModel(nn.Module):
 
 
         for idx in range(self.max_decoder_length):
+            # todo: update
             decoder_output, (decoder_hidden_states, decoder_cell_states), attn_weights, \
-            context_vector, state_attn_weights = self.action_decoder(
+            context_vector = self.action_decoder(
                 input=decoder_input,
                 hidden=(decoder_hidden_states, decoder_cell_states),
-                state=batch_state_encoding,
-                init_state=batch_init_state_encoding,
-                encoder_states=encoder_states,
-                instruction_mask=instruction_mask,
+                encoded_world_state=encoded_world_state,
+                # instruction_mask=instruction_mask,
+                up_to_this_instruction_encoder_hidden=up_to_this_instruction_encoder_hidden,
+                up_to_this_instruction_mask=up_to_this_instruction_mask,
                 context_vector=context_vector
             )
             decoder_outputs[:, idx, :] = decoder_output
@@ -386,10 +425,10 @@ class SeqToSeqModel(nn.Module):
                 action_word = self.idx_to_action_word[predicted_action[i]]
                 single_action[i].append(action_word)
                 # ------------------------------------------------ #
-                if len(single_action[i]) == 3 and not EOS[i]:
-                    if single_action[i][0] != '_EOS':
+                if len(single_action[i]) == 4 and not EOS[i]:
+                    if single_action[i][0] != '_EOS' and single_action[i][0] != 'SEP' :
                         try:
-                            world_states[i] = world_state.execute_seq([single_action[i]])
+                            world_states[i] = world_state.execute_seq([single_action[i][:3]])
                         except Exception:
                             # ignore wrong actions
                             pass
@@ -402,14 +441,13 @@ class SeqToSeqModel(nn.Module):
             else:
                 decoder_input = topi
 
-            if self.action_decoder.num_layers > 1 and attn_weights is not None and state_attn_weights is not None:
+            if self.action_decoder.num_layers > 1 and attn_weights is not None:
                 attn_weights = attn_weights[:, 0:1, :]
                 seq_attn_weights.append(attn_weights)
-                state_attn_weights = state_attn_weights[:, 0:1, :]
-                seq_state_attn_weights.append(state_attn_weights)
+                # state_attn_weights = state_attn_weights[:, 0:1, :]
+                # seq_state_attn_weights.append(state_attn_weights)
 
-        return decoder_outputs, [str(state) for state in world_states], torch.stack(seq_attn_weights).transpose(0, 1), \
-               torch.stack(seq_state_attn_weights).transpose(0, 1)
+        return decoder_outputs, [str(state) for state in world_states], torch.stack(seq_attn_weights).transpose(0, 1)
 
     def forward(self, batch_inputs):
         """
@@ -425,42 +463,73 @@ class SeqToSeqModel(nn.Module):
         actions_str = batch_inputs['actions_str']
         before_env_str = batch_inputs['before_env_str']
         initial_env_str = batch_inputs['initial_env_str']
+        init_state = batch_inputs['init_state'] #(batch_size, num_beakers, num_colors)
+        # get idx for up_to_this data
+        # (batch_size, )
+        instruction_idx = torch.tensor(list(map(lambda x: int(x.split('-')[-1]), batch_inputs['identifier'])))
+        # up-to-this-data
+        up_to_this_states = batch_inputs['up_to_this_states'] # (batch_size, 5, num_beakers, num_colors)
+        up_to_this_instructions = batch_inputs['up_to_this_instructions'] # (batch_size, 5, instruction_length)
+        up_to_this_instructions_mask = batch_inputs['up_to_this_instructions_mask'] # (batch_size, 5, instruction_length)
         batch_size = instruction.size(0)
 
 
         if torch.cuda.is_available():
             self.gpu_index = instruction.device.index
 
+
+
         # -------------- encoder -------------- #
-        instruction_encoder_outputs, instruction_encoder_hidden = self._encode_instructions(instruction)
+        # shape: batch_size x 5 x hidden_size
+        # bidirectional hence 2 TODO: refactor
+        instructions_encoder_hidden = torch.empty((batch_size, alchemy_fsa.NUM_INSTRUCTION_PER_INTERACTION, 2,
+                                                   self.hidden_size))
+        instructions_encoder_cell = torch.empty((batch_size, alchemy_fsa.NUM_INSTRUCTION_PER_INTERACTION, 2,
+                                                   self.hidden_size))
+        encoded_world_states = torch.empty((batch_size, alchemy_fsa.NUM_INSTRUCTION_PER_INTERACTION,
+                                                   self.hidden_size))
+        ### move tensor to GPU ###
+        if torch.cuda.is_available():
+            instructions_encoder_hidden = instructions_encoder_hidden.cuda(self.gpu_index)
+            instructions_encoder_cell = instructions_encoder_cell.cuda(self.gpu_index)
+            encoded_world_states = encoded_world_states.cuda(self.gpu_index)
+            up_to_this_instructions = up_to_this_instructions.cuda(self.gpu_index)
+            up_to_this_states = up_to_this_states.cuda(self.gpu_index)
+            # batch_state_encoding = batch_state_encoding.cuda(self.gpu_index)
+            # batch_init_state_encoding = batch_init_state_encoding.cuda(self.gpu_index)
+            # instruction_encoder_outputs = instruction_encoder_outputs.cuda(self.gpu_index)
+        ###########################
+        for idx in range(alchemy_fsa.NUM_INSTRUCTION_PER_INTERACTION):
+            # encode state using MLP
+            encoded_world_state = self.state_encoder(up_to_this_states[:, idx, :])
+            encoded_world_states[:, idx, :] = encoded_world_state
+            output, (hidden_state, cell_state) = self._encode_instructions(input_seq=up_to_this_instructions[:, idx, :],
+                                                                                  encoded_world_state=encoded_world_state)
+            instructions_encoder_hidden[:, idx, :, :] = hidden_state.transpose(0, 1)
+            instructions_encoder_cell[:, idx, :, :] = cell_state.transpose(0, 1)
 
         # -------------- state encoding -------------- #
         world_states = [None] * batch_size
         for i, env in enumerate(before_env_str):
             world_states[i] = AlchemyWorldState(str(env))
-        batch_state_encoding = self._encode_world_state([str(world_state) for world_state in world_states])
-        # batch_state_encoding = self._encode_beaker_state([str(world_state) for world_state in world_states])
-        batch_init_state_encoding = self._encode_beaker_state([str(world_state) for world_state in initial_env_str])
-
-        ### move tensor to GPU ###
-        if torch.cuda.is_available():
-            batch_state_encoding = batch_state_encoding.cuda(self.gpu_index)
-            batch_init_state_encoding = batch_init_state_encoding.cuda(self.gpu_index)
-            instruction_encoder_outputs = instruction_encoder_outputs.cuda(self.gpu_index)
-        ###########################
-
+        # # batch_state_encoding = self._encode_world_state([str(world_state) for world_state in world_states])
+        # # batch_state_encoding = self._encode_beaker_state([str(world_state) for world_state in world_states])
+        # batch_state_encoding = None #TODO
+        # batch_init_state_encoding = self._encode_beaker_state([str(world_state) for world_state in initial_env_str])
         # -------------- decoder -------------- #
-        decoder_outputs, world_states_str, attn_weights, state_attn_weights = self._decode(
-                                       instruction_encoder_hidden=instruction_encoder_hidden,
-                                       encoder_states=instruction_encoder_outputs,
-                                       instruction_mask=instruction_mask,
+        decoder_outputs, world_states_str, attn_weights  = self._decode(
+                                       instruction_encoder_hidden=(instructions_encoder_hidden[np.arange(batch_size), instruction_idx, :, :],
+                                                                   instructions_encoder_cell[np.arange(batch_size), instruction_idx, :, :]),
+                                       instruction_mask=up_to_this_instructions_mask[np.arange(batch_size), instruction_idx, :],
+                                       encoded_world_state=encoded_world_states[np.arange(batch_size),instruction_idx, :],
+                                       up_to_this_instruction_encoder_hidden=instructions_encoder_hidden,
+                                       up_to_this_instruction_mask=up_to_this_instructions_mask,
+                                       up_to_this_encoded_world_states=encoded_world_states,
                                        world_states=world_states,
-                                       batch_state_encoding=batch_state_encoding,
-                                       batch_init_state_encoding=batch_init_state_encoding,
                                        actions=action_words, # for single token
                                        actions_str=actions_str)
 
-        return decoder_outputs, world_states_str, attn_weights, state_attn_weights
+        return decoder_outputs, world_states_str, attn_weights, None
 
 
     def predict_instruction(self, instruction_example):
@@ -527,10 +596,10 @@ class SeqToSeqModel(nn.Module):
                 'whole_instruction_mask': whole_instruction_mask[:, i, :],
                 'initial_env_str': initial_env_str
             }
-            decoder_outputs, world_states_str, attn_weights, state_attn_weights = self.predict_instruction(instruction_example)
+            decoder_outputs, world_states_str, attn_weights = self.predict_instruction(instruction_example)
             before_env_str = world_states_str
 
-        return decoder_outputs, world_states_str
+        return decoder_outputs, world_states_str, None
 
 
 

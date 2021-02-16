@@ -10,6 +10,7 @@ NUM_BEAKER = 7
 ACTION_POP = 'pop'
 ACTION_PUSH = 'push'
 ACTIONS = [ACTION_POP, ACTION_PUSH]
+NUM_INSTRUCTION_PER_INTERACTION = 5
 
 # FSA states of the execution FSA.
 class FSAStates(Enum):

@@ -184,7 +184,10 @@ class AlchemySolver(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hparams.lr)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
-        return [optimizer], [scheduler]
+        if self.hparams.percent_check > 0:
+            return optimizer
+        else:
+            return [optimizer], [scheduler]
 
     def _print_sample(self, batch, decoded_actions, attn_weights, state_attn_weights, sample_idx):
         """print out samples and predictions"""
@@ -215,24 +218,26 @@ class AlchemySolver(pl.LightningModule):
         #           attn_weight[weights_idx].detach().cpu().numpy())
 
     def validation_step(self, batch, batch_idx):
-        # forward
-        decoded_actions, world_states, attn_weights, state_attn_weights = self.model.predict_instruction(batch)
-        # compute loss
-        loss = self._compute_loss(decoded_actions, batch['action_word_labels'])
-        # compute accuracy
-        world_state_accuracy, incorrect_prediction, correct_prediction \
-            = self._get_world_state_accuracy(world_states, batch["after_env_str"])
-        # check sample prediction
-        if batch_idx == 0:
-            if len(incorrect_prediction) > 0:
-                print("########{} incorrect sample:".format(batch_idx))
-                sample_idx = incorrect_prediction[np.random.randint(0, len(incorrect_prediction))]
-                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
-            if len(correct_prediction) > 0:
-                print("########{} correct sample:".format(batch_idx))
-                sample_idx = correct_prediction[np.random.randint(0, len(correct_prediction))]
-                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
-        # return values
+        loss = torch.tensor(0.0)
+        world_state_accuracy = 0.0
+        # # forward
+        # decoded_actions, world_states, attn_weights, state_attn_weights = self.model.predict_instruction(batch)
+        # # compute loss
+        # loss = self._compute_loss(decoded_actions, batch['action_word_labels'])
+        # # compute accuracy
+        # world_state_accuracy, incorrect_prediction, correct_prediction \
+        #     = self._get_world_state_accuracy(world_states, batch["after_env_str"])
+        # # check sample prediction
+        # if batch_idx == 0:
+        #     if len(incorrect_prediction) > 0:
+        #         print("########{} incorrect sample:".format(batch_idx))
+        #         sample_idx = incorrect_prediction[np.random.randint(0, len(incorrect_prediction))]
+        #         self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+        #     if len(correct_prediction) > 0:
+        #         print("########{} correct sample:".format(batch_idx))
+        #         sample_idx = correct_prediction[np.random.randint(0, len(correct_prediction))]
+        #         self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+        # # return values
         tqdm_dict = {
             'val_loss': loss,
             'val_acc': torch.tensor(world_state_accuracy)
@@ -248,14 +253,15 @@ class AlchemySolver(pl.LightningModule):
 
     def validation_epoch_end(self, outputs):
         # compute average loss and accuracy
-        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        avg_acc = torch.stack([x['val_acc'] for x in outputs]).mean()
-        tqdm_dict = {'val_loss': avg_loss,
-                     'val_acc': avg_acc}
-        return {'val_loss': avg_loss,
-                'val_acc': avg_acc,
-                'log': tqdm_dict,
-                'progress_bar': tqdm_dict}
+        # avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
+        # avg_acc = torch.stack([x['val_acc'] for x in outputs]).mean()
+        # tqdm_dict = {'val_loss': avg_loss,
+        #              'val_acc': avg_acc}
+        # return {'val_loss': avg_loss,
+        #         'val_acc': avg_acc,
+        #         'log': tqdm_dict,
+        #         'progress_bar': tqdm_dict}
+        return {}
 
     def val_dataloader(self):
         return torch.utils.data.DataLoader(dataset=self.val_dataset,
@@ -384,19 +390,19 @@ def main():
                           default='results/test_pred')
     argparse.add_argument("--train_batch_size",
                           help="training batch size",
-                          dest="train_batch_size", type=int, default=16)
+                          dest="train_batch_size", type=int, default=32)
     argparse.add_argument("--test_batch_size",
                           help="testing batch size",
-                          dest="test_batch_size", type=int, default=16)
+                          dest="test_batch_size", type=int, default=32)
     argparse.add_argument("--val_batch_size",
                           help="validation batch size",
-                          dest="val_batch_size", type=int, default=16)
+                          dest="val_batch_size", type=int, default=32)
     argparse.add_argument("--num_worker",
                           help="number of worker for dataloader",
-                          dest="num_worker", type=int, default=4)
+                          dest="num_worker", type=int, default=10)
     argparse.add_argument("--hidden_size",
                           help="size of the hidden layer of RNN",
-                          dest="hidden_size", type=int, default=100)
+                          dest="hidden_size", type=int, default=128)
     argparse.add_argument("--num_layers",
                           help="number of layers of the RNN",
                           dest="num_layers", type=int, default=1)
