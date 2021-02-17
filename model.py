@@ -66,7 +66,7 @@ class Attention(nn.Module):
 
 class EncoderRNN(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers=1,
-                 use_bidirectional=True):
+                 use_bidirectional=True, dropout_p=0.2):
         """
         Bi-directional LSTM Encoder for instruction
         """
@@ -77,7 +77,8 @@ class EncoderRNN(nn.Module):
         self.rnn = nn.LSTM(input_size=hidden_size,
                            hidden_size=hidden_size,
                            num_layers=num_layers, batch_first=True,
-                           bidirectional=use_bidirectional)
+                           bidirectional=use_bidirectional,
+                           dropout=dropout_p)
 
         self.num_direction = 2 if use_bidirectional else 1
         # let's assume we only use bidirectional LSTM for now
@@ -150,7 +151,8 @@ class DecoderRNN(nn.Module):
             # self.state_attention = Attention(query_dim=self.hidden_size,
             #                            context_dim=hidden_size)
             # Use multi-head attention
-            self.encoder_attention = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=8)
+            self.encoder_attention = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=8,
+                                                           dropout=0.1)
             # self.state_attention = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=4)
             # self.init_state_attention = Attention(query_dim=self.hidden_size,
             #                            context_dim=hidden_size)
@@ -532,48 +534,12 @@ class SeqToSeqModel(nn.Module):
         return decoder_outputs, world_states_str, attn_weights, None
 
 
-    def predict_instruction(self, instruction_example):
+    def predict_instruction(self, batch_instruction):
         """
         Given a batch of instruction example, returns a predicted action and final world state
         """
-        instruction = instruction_example['whole_instruction']
-        instruction_mask = instruction_example['whole_instruction_mask']
-        before_env_str = instruction_example['before_env_str']
-        initial_env_str = instruction_example['initial_env_str']
-        batch_size = instruction.size(0)
 
-        if torch.cuda.is_available():
-            self.gpu_index = instruction.device.index
-
-        # -------------- encoder -------------- #
-        instruction_encoder_outputs, instruction_encoder_hidden = self._encode_instructions(instruction)
-
-        # -------------- state encoding -------------- #
-        # shape: batch_size x 1 x embedding_shape
-        world_states = [None] * batch_size
-        for i, env in enumerate(before_env_str):
-            world_states[i] = AlchemyWorldState(str(env))
-        batch_state_encoding = self._encode_world_state([str(world_state) for world_state in world_states])
-        # batch_state_encoding = self._encode_beaker_state([str(world_state) for world_state in world_states])
-        batch_init_state_encoding = self._encode_beaker_state([str(world_state) for world_state in initial_env_str])
-
-        ### move tensor to GPU ###
-        if torch.cuda.is_available():
-            batch_state_encoding = batch_state_encoding.cuda(self.gpu_index)
-            batch_init_state_encoding = batch_init_state_encoding.cuda(self.gpu_index)
-            instruction_encoder_outputs = instruction_encoder_outputs.cuda(self.gpu_index)
-        ###########################
-
-        # -------------- decoder -------------- #
-        decoder_outputs, world_states_str, attn_weights, state_attn_weights = self._decode(
-                                                     instruction_encoder_hidden=instruction_encoder_hidden,
-                                                     encoder_states=instruction_encoder_outputs,
-                                                     instruction_mask=instruction_mask,
-                                                     world_states=world_states,
-                                                     batch_state_encoding=batch_state_encoding,
-                                                     batch_init_state_encoding=batch_init_state_encoding)
-
-        return decoder_outputs, world_states_str, attn_weights, state_attn_weights
+        return self(batch_instruction)
 
     def predict_interaction(self, interaction_example):
         """

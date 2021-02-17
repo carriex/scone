@@ -145,7 +145,6 @@ class AlchemySolver(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         # forward
         decoded_actions, world_states, attn_weights, state_attn_weights = self(batch)
-
         # compute loss
         loss = self._compute_loss(decoded_actions, batch['action_word_labels'])
         # compute accuracy
@@ -220,24 +219,24 @@ class AlchemySolver(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss = torch.tensor(0.0)
         world_state_accuracy = 0.0
-        # # forward
-        # decoded_actions, world_states, attn_weights, state_attn_weights = self.model.predict_instruction(batch)
-        # # compute loss
-        # loss = self._compute_loss(decoded_actions, batch['action_word_labels'])
-        # # compute accuracy
-        # world_state_accuracy, incorrect_prediction, correct_prediction \
-        #     = self._get_world_state_accuracy(world_states, batch["after_env_str"])
-        # # check sample prediction
-        # if batch_idx == 0:
-        #     if len(incorrect_prediction) > 0:
-        #         print("########{} incorrect sample:".format(batch_idx))
-        #         sample_idx = incorrect_prediction[np.random.randint(0, len(incorrect_prediction))]
-        #         self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
-        #     if len(correct_prediction) > 0:
-        #         print("########{} correct sample:".format(batch_idx))
-        #         sample_idx = correct_prediction[np.random.randint(0, len(correct_prediction))]
-        #         self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
-        # # return values
+        # forward
+        decoded_actions, world_states, attn_weights, state_attn_weights = self.model.predict_instruction(batch)
+        # compute loss
+        loss = self._compute_loss(decoded_actions, batch['action_word_labels'])
+        # compute accuracy
+        world_state_accuracy, incorrect_prediction, correct_prediction \
+            = self._get_world_state_accuracy(world_states, batch["after_env_str"])
+        # check sample prediction
+        if batch_idx == 0:
+            if len(incorrect_prediction) > 0:
+                print("########{} incorrect sample:".format(batch_idx))
+                sample_idx = incorrect_prediction[np.random.randint(0, len(incorrect_prediction))]
+                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+            if len(correct_prediction) > 0:
+                print("########{} correct sample:".format(batch_idx))
+                sample_idx = correct_prediction[np.random.randint(0, len(correct_prediction))]
+                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+        # return values
         tqdm_dict = {
             'val_loss': loss,
             'val_acc': torch.tensor(world_state_accuracy)
@@ -253,14 +252,14 @@ class AlchemySolver(pl.LightningModule):
 
     def validation_epoch_end(self, outputs):
         # compute average loss and accuracy
-        # avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        # avg_acc = torch.stack([x['val_acc'] for x in outputs]).mean()
-        # tqdm_dict = {'val_loss': avg_loss,
-        #              'val_acc': avg_acc}
-        # return {'val_loss': avg_loss,
-        #         'val_acc': avg_acc,
-        #         'log': tqdm_dict,
-        #         'progress_bar': tqdm_dict}
+        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
+        avg_acc = torch.stack([x['val_acc'] for x in outputs]).mean()
+        tqdm_dict = {'val_loss': avg_loss,
+                     'val_acc': avg_acc}
+        return {'val_loss': avg_loss,
+                'val_acc': avg_acc,
+                'log': tqdm_dict,
+                'progress_bar': tqdm_dict}
         return {}
 
     def val_dataloader(self):
@@ -289,9 +288,10 @@ class AlchemySolver(pl.LightningModule):
 
         # interaction prediction
         else:
-            decoded_actions, world_states = self.model.predict_interaction(batch)
-            self.test_interaction_results['id'] += batch['identifier']
-            self.test_interaction_results['final_world_state'] += world_states
+            pass
+        #     decoded_actions, world_states = self.model.predict_interaction(batch)
+        #     self.test_interaction_results['id'] += batch['identifier']
+        #     self.test_interaction_results['final_world_state'] += world_states
         ########### dumb output #########
         output = OrderedDict({
             'test_loss': 0,
@@ -313,28 +313,26 @@ class AlchemySolver(pl.LightningModule):
     def test_epoch_end(self, outputs):
         # save dev result to csv
         # instruction
-        print([(key, len(value)) for key, value in self.test_instruction_results.items()])
-        print([(key, value[0]) for key, value in self.test_instruction_results.items()])
         df_instruction = pd.DataFrame.from_dict(self.test_instruction_results)
         instruction_pred_name = '{}-instruction.csv'.format(self.hparams.test_result)
         df_instruction.to_csv(instruction_pred_name, index=False)
         print("Test instruction output saved at {}".format(instruction_pred_name))
         instruction_acc = self._get_test_accuracy(instruction_pred_name, self.hparams.test_instruction_label)
         # interaction
-        df_interaction = pd.DataFrame.from_dict(self.test_interaction_results)
-        interaction_pred_name = '{}-interaction.csv'.format(self.hparams.test_result)
-        df_interaction.to_csv(interaction_pred_name, index=False)
-        print("Test interaction output saved at {}".format(interaction_pred_name))
-        interaction_acc = self._get_test_accuracy(interaction_pred_name, self.hparams.test_interaction_label)
+        # df_interaction = pd.DataFrame.from_dict(self.test_interaction_results)
+        # interaction_pred_name = '{}-interaction.csv'.format(self.hparams.test_result)
+        # df_interaction.to_csv(interaction_pred_name, index=False)
+        # print("Test interaction output saved at {}".format(interaction_pred_name))
+        # interaction_acc = self._get_test_accuracy(interaction_pred_name, self.hparams.test_interaction_label)
 
         ###########  output ##############
         output = OrderedDict({
             'instruction_acc': instruction_acc,
-            'interaction_acc': interaction_acc,
+            # 'interaction_acc': interaction_acc,
             'progress_bar': {},
             'log': {
                 'instruction_acc': instruction_acc,
-                'interaction_acc': interaction_acc,
+                # 'interaction_acc': interaction_acc,
             }
         })
         ##################################
@@ -369,11 +367,11 @@ class AlchemySolver(pl.LightningModule):
                                            collate_fn=collate_fn,
                                            num_workers=self.hparams.num_worker),
 
-                torch.utils.data.DataLoader(dataset=self.test_interaction_dataset,
-                                            batch_size=self.hparams.test_batch_size,
-                                            shuffle=False,
-                                            collate_fn=collate_fn,
-                                            num_workers=self.hparams.num_worker)
+                # torch.utils.data.DataLoader(dataset=self.test_interaction_dataset,
+                #                             batch_size=self.hparams.test_batch_size,
+                #                             shuffle=False,
+                #                             collate_fn=collate_fn,
+                #                             num_workers=self.hparams.num_worker)
                                      ]
 
 def main():
