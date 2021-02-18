@@ -156,11 +156,11 @@ class AlchemySolver(pl.LightningModule):
             if len(incorrect_prediction) > 0:
                 print("########{} incorrect sample:".format(batch_idx))
                 sample_idx = incorrect_prediction[np.random.randint(0, len(incorrect_prediction))]
-                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, sample_idx)
             if len(correct_prediction) > 0:
                 print("########{} correct sample:".format(batch_idx))
                 sample_idx = correct_prediction[np.random.randint(0, len(correct_prediction))]
-                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, sample_idx)
         # return values
         tqdm_dict = {
             'training_loss': loss,
@@ -186,18 +186,22 @@ class AlchemySolver(pl.LightningModule):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=40)
         return [optimizer], [scheduler]
 
-    def _print_sample(self, batch, decoded_actions, attn_weights, state_attn_weights, sample_idx):
+    def _print_sample(self, batch, decoded_actions, attn_weights, state_attn_weights, world_states, sample_idx):
         """print out samples and predictions"""
         _, predict_labels = decoded_actions.max(2)
         print(">>>Idx {} Before env: ".format(batch['identifier'][sample_idx]), batch['before_env_str'][sample_idx])
         print("Instruction:",
-              [self.train_dataset.idx_to_word[idx] for idx in batch['instruction'].cpu().numpy()[sample_idx]])
+              [self.train_dataset.idx_to_word[idx] for idx in batch['whole_instruction'].cpu().numpy()[sample_idx]])
         # print("Instruction:",
         #       [self.train_dataset.idx_to_word[idx] for idx in batch['whole_instruction'].cpu().numpy()[sample_idx]])
         print("Action words:",
         [self.train_dataset.idx_to_action_words[idx] for idx in batch['action_words'].cpu().numpy()[sample_idx]])
         print("Predicted actions:",
               [self.train_dataset.idx_to_action_words[idx] for idx in predict_labels.cpu().numpy()[sample_idx]])
+        print("After env: ",
+              batch['after_env_str'][sample_idx])
+        print("Predicted env: ",
+              world_states[sample_idx])
         # if state_attn_weights is not None:
         #     state_attn_weights = state_attn_weights[-1]
         #     state_weight_idx = torch.argsort(state_attn_weights[sample_idx], descending=True).cpu().numpy()
@@ -227,11 +231,11 @@ class AlchemySolver(pl.LightningModule):
             if len(incorrect_prediction) > 0:
                 print("########{} incorrect sample:".format(batch_idx))
                 sample_idx = incorrect_prediction[np.random.randint(0, len(incorrect_prediction))]
-                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, sample_idx)
             if len(correct_prediction) > 0:
                 print("########{} correct sample:".format(batch_idx))
                 sample_idx = correct_prediction[np.random.randint(0, len(correct_prediction))]
-                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, sample_idx)
         # return values
         tqdm_dict = {
             'val_loss': loss,
@@ -272,7 +276,7 @@ class AlchemySolver(pl.LightningModule):
             predicted_actions = []
             for idx in range(self.hparams.test_batch_size):
                 try:
-                    self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, idx)
+                    self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, idx)
                     predicted_actions.append([self.train_dataset.idx_to_action_words[i]
                                                                    for i in predict_labels.cpu().numpy()[idx]])
                 except IndexError:
@@ -384,13 +388,13 @@ def main():
                           default='results/test_pred')
     argparse.add_argument("--train_batch_size",
                           help="training batch size",
-                          dest="train_batch_size", type=int, default=64)
+                          dest="train_batch_size", type=int, default=32)
     argparse.add_argument("--test_batch_size",
                           help="testing batch size",
-                          dest="test_batch_size", type=int, default=64)
+                          dest="test_batch_size", type=int, default=32)
     argparse.add_argument("--val_batch_size",
                           help="validation batch size",
-                          dest="val_batch_size", type=int, default=64)
+                          dest="val_batch_size", type=int, default=32)
     argparse.add_argument("--num_worker",
                           help="number of worker for dataloader",
                           dest="num_worker", type=int, default=10)
@@ -405,7 +409,7 @@ def main():
                           dest="teacher_forcing_ratio", type=float, default=1)
     argparse.add_argument("--num_epoches",
                           help="number of training epoches",
-                          dest="num_epoches", type=int, default=200)
+                          dest="num_epoches", type=int, default=100)
     argparse.add_argument("--lr",
                           help="initial learning rate",
                           dest="lr", type=float, default=1e-3)
@@ -427,6 +431,13 @@ def main():
                           dest="use_attention",
                           action="store_true",
                           default=True)
+    argparse.add_argument("--model_name",
+                          help="model name",
+                          dest="model_name",
+                          default="default")
+    argparse.add_argument("--version_name",
+                          help="version name",
+                          dest="version_name")
     argparse.add_argument("-p", "--percent_check",
                           help="use only a certain percentage of data to run",
                           dest="percent_check",
@@ -445,9 +456,20 @@ def main():
         solver = AlchemySolver(hparams=args)
 
     # turn off logging / checkpointing if running test
-    use_logger = False if args.unit_test or args.run_test else True
+    use_logger = False if args.unit_test or args.run_test else pl.loggers.tensorboard.TensorBoardLogger(
+        save_dir='./lightning_logs',
+        name=args.model_name)
     use_checkpoint_callback = False if args.unit_test or args.run_test else True
 
+    if args.unit_test or args.run_test:
+        use_logger = False
+    elif args.version_name is not None:
+        use_logger = pl.loggers.tensorboard.TensorBoardLogger(save_dir='./lightning_logs',
+                                                              name=args.model_name,
+                                                              version=args.version_name)
+    else:
+        use_logger = pl.loggers.tensorboard.TensorBoardLogger(save_dir='./lightning_logs',
+                                                              name=args.model_name)
     trainer = pl.Trainer(gpus=1,
                          deterministic=True,
                          max_epochs=args.num_epoches,
@@ -455,7 +477,8 @@ def main():
                          logger=use_logger,
                          checkpoint_callback=use_checkpoint_callback,
                          overfit_pct=args.percent_check,
-                         callbacks=[LearningRateCallBack()]
+                         callbacks=[LearningRateCallBack()],
+                         gradient_clip_val=1.0,
                          )
 
     if not args.run_test:

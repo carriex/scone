@@ -46,7 +46,7 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         # self.word_to_idx = {}
         self.word_to_idx = {'SEP_PREV':0, 'SEP_CURR':1}
         self.action_to_idx = {}
-        self.action_word_to_idx = {}
+        self.action_word_to_idx = {'SEP': 0}
         self.state_to_idx = {}
         self.num_actions = 0
         self.num_word_actions = 0
@@ -111,9 +111,9 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         actions_str = self._preprocess_actions_str(actions_str)
         # encode instruction and action
         instruction, instruction_mask = self._encode_and_pad_instruction(instruction_str)
-        actions = self._encode_and_pad_action(actions_str)
+        # actions = self._encode_and_pad_action(actions_str)
         action_words = self._encode_and_pad_action_word(action_words)
-        action_labels = self._encode_and_pad_action_labels(actions_str)
+        # action_labels = self._encode_and_pad_action_labels(actions_str)
         init_states = torch.stack([self.encode_and_pad_beaker_state(state) for state in init_states])
         whole_instruction, whole_instruction_mask = self._encode_and_pad_whole_instruction(whole_instruction)
         return {
@@ -121,10 +121,10 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
             'instruction': instruction,
             'instruction_mask': instruction_mask,
             'instruction_str': instruction_str,
-            'actions': actions,
+            # 'actions': actions,
             'action_words': action_words,
             'action_word_labels': action_words,
-            'action_labels': action_labels,
+            # 'action_labels': action_labels,
             'actions_str': actions_str,
             'before_env_str': before_env_str,
             'after_env_str': after_env_str,
@@ -220,10 +220,14 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
 
     def _preprocess_actions_str(self, actions_str):
         processed_actions_str = []
-        for actions in actions_str:
+        for i, actions in enumerate(actions_str):
             if 'pop' in actions:
                 actions += ' _NONE'
             processed_actions_str.append(actions)
+            # Add a separating token between actions
+            if i < len(actions_str) - 1:
+                processed_actions_str.append('SEP')
+            #########################################
         return processed_actions_str
 
     def preprocess_world_state_str(self, world_state_str):
