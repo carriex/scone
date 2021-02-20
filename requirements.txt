@@ -1,5 +1,5 @@
-numpy
-scipy
-torch
-sklearn
-pytorch_lightning
+numpy==1.18.1
+scipy==1.4.1
+torch==1.4.0
+sklearn==0.22.1 
+pytorch_lightning==0.7.3
