@@ -106,11 +106,11 @@ class DecoderRNN(nn.Module):
                                                            dropout=attention_dropout)
             self.state_attention = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=2,
                                                          dropout=attention_dropout)
-            # self.init_state_attention = Attention(query_dim=self.hidden_size,
-            #                            context_dim=hidden_size)
+            self.init_state_attention = nn.MultiheadAttention(embed_dim=self.hidden_size, num_heads=2,
+                                                         dropout=attention_dropout)
             # TODO: update shape
             # self.attn_combine = nn.Linear((self.hidden_size * 3) + self.hidden_size, self.hidden_size)
-            self.attn_combine = nn.Linear((self.hidden_size * 2) + self.hidden_size, self.hidden_size)
+            self.attn_combine = nn.Linear((self.hidden_size * 3) + self.hidden_size, self.hidden_size)
         # --------------------------------------- #
         self.rnn = nn.LSTM(input_size=self.hidden_size,
                            hidden_size=self.hidden_size,
@@ -133,6 +133,7 @@ class DecoderRNN(nn.Module):
             # state, state_attn_weights = self.state_attention(query=hidden_state,
             #                        context_vecs=state)
             # Use mutlihead attention
+            # print(state.shape, init_state.shape, hidden_state.shape)
             encoder_attn_outputs, encoder_attn_weights = self.encoder_attention(query=hidden_state.transpose(0, 1),
                                                                                key=encoder_states.transpose(0, 1),
                                                                                value=encoder_states.transpose(0, 1),
@@ -141,8 +142,11 @@ class DecoderRNN(nn.Module):
             state_attn_outputs, state_attn_weights = self.state_attention(query=hidden_state.transpose(0, 1),
                                                                          key=state.transpose(0, 1),
                                                                          value=state.transpose(0, 1))
+            init_state_attn_outputs, init_state_attn_weights = self.init_state_attention(query=hidden_state.transpose(0, 1),
+                                                                                         key=init_state.transpose(0, 1),
+                                                                                         value=init_state.transpose(0, 1))
             hidden_state = torch.cat((hidden_state.transpose(0, 1),
-                                      encoder_attn_outputs, state_attn_outputs), dim=2)
+                                      encoder_attn_outputs, state_attn_outputs, init_state_attn_outputs), dim=2)
             hidden_state = nn.ReLU()(self.attn_combine(hidden_state))
             hidden = (hidden_state.contiguous(), hidden[1])
         # --------------------------------------- #
@@ -199,7 +203,7 @@ class SeqToSeqModel(nn.Module):
         # -------------- network -------------- #
         self.instruction_encoder = EncoderRNN(instruction_input_size, hidden_size)
         self.state_encoder = EncoderRNN(state_input_size, hidden_size * 2, use_bidirectional=False)
-        self.state_beaker_encoder = EncoderRNN(state_input_size, hidden_size, use_bidirectional=False)
+        self.state_beaker_encoder = EncoderRNN(state_input_size, hidden_size * 2, use_bidirectional=False)
         self.action_decoder = DecoderRNN(hidden_size=hidden_size,
                                          output_size=output_size,
                                          max_encoder_length=self.max_encoder_length,
@@ -428,8 +432,9 @@ class SeqToSeqModel(nn.Module):
         world_states = [None] * batch_size
         for i, env in enumerate(before_env_str):
             world_states[i] = AlchemyWorldState(str(env))
-        batch_state_encoding = self._encode_world_state([str(world_state) for world_state in world_states])
-        # batch_state_encoding = self._encode_beaker_state([str(world_state) for world_state in world_states])
+        # batch_state_encoding = self._encode_world_state([str(world_state) for world_state in world_states])
+        batch_state_encoding = self._encode_beaker_state([str(world_state) for world_state in world_states])
+        # batch_init_state_encoding = self._encode_world_state([str(world_state) for world_state in initial_env_str])
         batch_init_state_encoding = self._encode_beaker_state([str(world_state) for world_state in initial_env_str])
 
         ### move tensor to GPU ###
