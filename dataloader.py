@@ -46,7 +46,7 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
         # self.word_to_idx = {}
         self.word_to_idx = {'SEP_PREV':0, 'SEP_CURR':1}
         self.action_to_idx = {}
-        self.action_word_to_idx = {'SEP': 0}
+        self.action_word_to_idx = {}
         self.state_to_idx = {}
         self.num_actions = 0
         self.num_word_actions = 0
@@ -220,14 +220,10 @@ class AlchemyInstructionDataset(torch.utils.data.Dataset):
 
     def _preprocess_actions_str(self, actions_str):
         processed_actions_str = []
-        for i, actions in enumerate(actions_str):
+        for actions in actions_str:
             if 'pop' in actions:
                 actions += ' _NONE'
             processed_actions_str.append(actions)
-            # Add a separating token between actions
-            if i < len(actions_str) - 1:
-                processed_actions_str.append('SEP')
-            #########################################
         return processed_actions_str
 
     def preprocess_world_state_str(self, world_state_str):

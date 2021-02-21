@@ -83,7 +83,7 @@ class DecoderRNN(nn.Module):
                  num_layers=2,
                  use_attention=False,
                  dropout_p=0.2,
-                 attention_dropout=0.5):
+                 attention_dropout=0.1):
         """
         Two layer LSTM with attention for action decoding
         """
@@ -376,10 +376,10 @@ class SeqToSeqModel(nn.Module):
                 action_word = self.idx_to_action_word[predicted_action[i]]
                 single_action[i].append(action_word)
                 # ------------------------------------------------ #
-                if len(single_action[i]) == 4 and not EOS[i]:
-                    if single_action[i][0] != '_EOS' and single_action[i][0] != 'SEP':
+                if len(single_action[i]) == 3 and not EOS[i]:
+                    if single_action[i][0] != '_EOS':
                         try:
-                            world_states[i] = world_state.execute_seq([single_action[i][:3]])
+                            world_states[i] = world_state.execute_seq([single_action[i]])
                         except Exception:
                             # ignore wrong actions
                             pass
