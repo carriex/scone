@@ -268,30 +268,30 @@ class AlchemySolver(pl.LightningModule):
                                            collate_fn=collate_fn,
                                            num_workers=self.hparams.num_worker)
 
-    def test_step(self, batch, batch_idx):
+    def test_step(self, batch, batch_idx, dataset_idx):
         # instruction prediction
-        # if dataset_idx == 0:
-        decoded_actions, world_states, attn_weights, state_attn_weights = self.model.predict_instruction(batch)
-        _, predict_labels = decoded_actions.max(2)
-        predicted_actions = []
-        for idx in range(self.hparams.test_batch_size):
-            try:
-                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, idx)
-                predicted_actions.append([self.train_dataset.idx_to_action_words[i]
-                                                               for i in predict_labels.cpu().numpy()[idx]])
-            except IndexError:
-                print(idx, " index error")
-        self.test_instruction_results['id'] += batch['identifier']
-        self.test_instruction_results['final_world_state'] += world_states
-        self.test_instruction_results['predicted actions'] += predicted_actions
+        if dataset_idx == 0:
+            decoded_actions, world_states, attn_weights, state_attn_weights = self.model.predict_instruction(batch)
+            _, predict_labels = decoded_actions.max(2)
+            predicted_actions = []
+            for idx in range(self.hparams.test_batch_size):
+                try:
+                    self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, idx)
+                    predicted_actions.append([self.train_dataset.idx_to_action_words[i]
+                                                                   for i in predict_labels.cpu().numpy()[idx]])
+                except IndexError:
+                    print(idx, " index error")
+            self.test_instruction_results['id'] += batch['identifier']
+            self.test_instruction_results['final_world_state'] += world_states
+            self.test_instruction_results['predicted actions'] += predicted_actions
 
         # interaction prediction
-        # else:
-        #     pass
-        #     # decoded_actions, world_states = self.model.predict_interaction(batch)
-        #     # self.test_interaction_results['id'] += batch['identifier']
-        #     # self.test_interaction_results['final_world_state'] += world_states
-        # ########### dumb output #########
+        else:
+            # pass
+            decoded_actions, world_states = self.model.predict_interaction(batch)
+            self.test_interaction_results['id'] += batch['identifier']
+            self.test_interaction_results['final_world_state'] += world_states
+        ########### dumb output #########
         output = OrderedDict({
             'test_loss': 0,
             'progress_bar': {},
@@ -319,12 +319,12 @@ class AlchemySolver(pl.LightningModule):
         df_instruction.to_csv(instruction_pred_name, index=False)
         print("Test instruction output saved at {}".format(instruction_pred_name))
         instruction_acc = self._get_test_accuracy(instruction_pred_name, self.hparams.test_instruction_label)
-        # # interaction
-        # df_interaction = pd.DataFrame.from_dict(self.test_interaction_results)
-        # interaction_pred_name = '{}-interaction.csv'.format(self.hparams.test_result)
-        # df_interaction.to_csv(interaction_pred_name, index=False)
-        # print("Test interaction output saved at {}".format(interaction_pred_name))
-        # interaction_acc = self._get_test_accuracy(interaction_pred_name, self.hparams.test_interaction_label)
+        # interaction
+        df_interaction = pd.DataFrame.from_dict(self.test_interaction_results)
+        interaction_pred_name = '{}-interaction.csv'.format(self.hparams.test_result)
+        df_interaction.to_csv(interaction_pred_name, index=False)
+        print("Test interaction output saved at {}".format(interaction_pred_name))
+        interaction_acc = self._get_test_accuracy(interaction_pred_name, self.hparams.test_interaction_label)
 
         ###########  output ##############
         output = OrderedDict({
@@ -333,7 +333,7 @@ class AlchemySolver(pl.LightningModule):
             'progress_bar': {},
             'log': {
                 'instruction_acc': instruction_acc,
-                # 'interaction_acc': interaction_acc,
+                'interaction_acc': interaction_acc,
             }
         })
         ##################################
@@ -351,15 +351,15 @@ class AlchemySolver(pl.LightningModule):
                                           max_beaker_state_length=self.train_dataset.max_beaker_state_length)
 
 
-        # self.test_interaction_dataset = AlchemyInstructionDataset(self.hparams.test_data,
-        #                                   is_interaction_dataset=True,
-        #                                   word_to_idx=self.train_dataset.word_to_idx,
-        #                                   action_to_idx=self.train_dataset.action_to_idx,
-        #                                   action_word_to_idx=self.train_dataset.action_word_to_idx,
-        #                                   state_to_idx=self.train_dataset.state_to_idx,
-        #                                   max_instruction_length=self.train_dataset.max_instruction_length,
-        #                                   max_whole_instruction_length=self.train_dataset.max_whole_instruction_length,
-        #                                   max_beaker_state_length=self.train_dataset.max_beaker_state_length)
+        self.test_interaction_dataset = AlchemyInstructionDataset(self.hparams.test_data,
+                                          is_interaction_dataset=True,
+                                          word_to_idx=self.train_dataset.word_to_idx,
+                                          action_to_idx=self.train_dataset.action_to_idx,
+                                          action_word_to_idx=self.train_dataset.action_word_to_idx,
+                                          state_to_idx=self.train_dataset.state_to_idx,
+                                          max_instruction_length=self.train_dataset.max_instruction_length,
+                                          max_whole_instruction_length=self.train_dataset.max_whole_instruction_length,
+                                          max_beaker_state_length=self.train_dataset.max_beaker_state_length)
 
 
         return [torch.utils.data.DataLoader(dataset=self.test_instruction_dataset,
@@ -368,11 +368,11 @@ class AlchemySolver(pl.LightningModule):
                                            collate_fn=collate_fn,
                                            num_workers=self.hparams.num_worker),
 
-                # torch.utils.data.DataLoader(dataset=self.test_interaction_dataset,
-                #                             batch_size=self.hparams.test_batch_size,
-                #                             shuffle=False,
-                #                             collate_fn=collate_fn,
-                #                             num_workers=self.hparams.num_worker)
+                torch.utils.data.DataLoader(dataset=self.test_interaction_dataset,
+                                            batch_size=self.hparams.test_batch_size,
+                                            shuffle=False,
+                                            collate_fn=collate_fn,
+                                            num_workers=self.hparams.num_worker)
                                      ]
 
 def main():

@@ -483,7 +483,9 @@ class SeqToSeqModel(nn.Module):
                 'whole_instruction': whole_instruction[:, i, :],
                 'before_env_str': before_env_str,
                 'whole_instruction_mask': whole_instruction_mask[:, i, :],
-                'initial_env_str': initial_env_str
+                'initial_env_str': initial_env_str,
+                'action_words': None,
+                'actions_str': None,
             }
             decoder_outputs, world_states_str, attn_weights, state_attn_weights = self.predict_instruction(instruction_example)
             before_env_str = world_states_str
