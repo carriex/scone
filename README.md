@@ -76,7 +76,7 @@ optional arguments:
 
 ### Evaluate the result
 
-Output the accuracy of the predicted actions. By default evaluation on instruction level and interaction level will be run at the end of the training.
+Output the accuracy of the predicted actions. By default evaluation on instruction level and interaction level will be run at the end of the training to the ```results``` directory.
 
 #### Output result and evaluate on trained model
 
@@ -87,10 +87,10 @@ $ python train_pl.py --load_from <path_to_checkpoint> --run_test
 #### Evaluate on output csv file
 ```bash
 # Instruction level  
-$ python evaluate.py -p predictions/test_pred_instruction.csv -l data/test_instruction_y.csv
+$ python evaluate.py -p results/test_pred_instruction.csv -l data/test_instruction_y.csv
 
 # Interaction level
-$ python evaluate.py -p predictions/test_pred_interaction.csv -l data/test_interaction_y.csv
+$ python evaluate.py -p results/test_pred_interaction.csv -l data/test_interaction_y.csv
 ```
 
 
