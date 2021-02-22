@@ -1,6 +1,7 @@
 # Sequence-to-sequence model for ALCHEMY dataset 
 
-This repo contains a sequence to sequence model to map instructions to action in the ALCHEMY environment.
+This repo contains a sequence to sequence model to map instructions to action in the [ALCHEMY environment](https://nlp.stanford.edu/projects/scone/).
+[blog entry](https://carriex.github.io/me/blog/entry1.html)
 
 ### Prerequisite
 
