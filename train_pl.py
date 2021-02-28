@@ -12,6 +12,7 @@ import torch
 import numpy as np
 import random
 import pandas as pd
+import os
 from sklearn.metrics import accuracy_score
 from collections import OrderedDict
 from model import SeqToSeqModel
@@ -29,8 +30,6 @@ def seed_everything(seed):
 
 class LearningRateCallBack(pl.Callback):
     '''Call back function for checking learning rate'''
-    def on_init_start(self, trainer):
-        print('Starting to init trainer!')
     def on_epoch_end(self, trainer, pl_module):
         if trainer.lr_schedulers:
             for scheduler in trainer.lr_schedulers:
@@ -61,18 +60,12 @@ class AlchemySolver(pl.LightningModule):
             instruction_input_size=len(self.train_dataset.word_to_idx),
             state_input_size=len(self.train_dataset.state_to_idx),
             hidden_size=self.hparams.hidden_size,
-            # max_encoder_length=self.train_dataset.max_instruction_length,
             max_encoder_length=self.train_dataset.max_whole_instruction_length,
             max_decoder_length=self.train_dataset.max_action_word_length,
             action_SOS_token=self.train_dataset.action_word_to_idx['_SOS'],
             action_EOS_token=self.train_dataset.action_word_to_idx['_EOS'],
             action_PAD_token=self.train_dataset.action_word_to_idx['_PAD'],
             output_size=self.train_dataset.num_word_actions,
-            # max_decoder_length=self.train_dataset.max_action_length,
-            # action_SOS_token=self.train_dataset.action_to_idx['_SOS'],
-            # action_EOS_token=self.train_dataset.action_to_idx['_EOS'],
-            # action_PAD_token=self.train_dataset.action_to_idx['_PAD'],
-            # output_size=self.train_dataset.num_actions,
             state_to_idx=self.train_dataset.state_to_idx,
             idx_to_action=self.train_dataset.idx_to_action,
             idx_to_action_word=self.train_dataset.idx_to_action_words,
@@ -156,11 +149,11 @@ class AlchemySolver(pl.LightningModule):
             if len(incorrect_prediction) > 0:
                 print("########{} incorrect sample:".format(batch_idx))
                 sample_idx = incorrect_prediction[np.random.randint(0, len(incorrect_prediction))]
-                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, sample_idx)
             if len(correct_prediction) > 0:
                 print("########{} correct sample:".format(batch_idx))
                 sample_idx = correct_prediction[np.random.randint(0, len(correct_prediction))]
-                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, sample_idx)
         # return values
         tqdm_dict = {
             'training_loss': loss,
@@ -182,11 +175,11 @@ class AlchemySolver(pl.LightningModule):
                                                num_workers=self.hparams.num_worker)
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hparams.lr)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.hparams.lr)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=40)
         return [optimizer], [scheduler]
 
-    def _print_sample(self, batch, decoded_actions, attn_weights, state_attn_weights, sample_idx):
+    def _print_sample(self, batch, decoded_actions, attn_weights, state_attn_weights, world_states, sample_idx):
         """print out samples and predictions"""
         _, predict_labels = decoded_actions.max(2)
         print(">>>Idx {} Before env: ".format(batch['identifier'][sample_idx]), batch['before_env_str'][sample_idx])
@@ -196,21 +189,10 @@ class AlchemySolver(pl.LightningModule):
         [self.train_dataset.idx_to_action_words[idx] for idx in batch['action_words'].cpu().numpy()[sample_idx]])
         print("Predicted actions:",
               [self.train_dataset.idx_to_action_words[idx] for idx in predict_labels.cpu().numpy()[sample_idx]])
-        if state_attn_weights is not None:
-            state_attn_weights = state_attn_weights[-1]
-            state_weight_idx = torch.argsort(state_attn_weights[sample_idx], descending=True).cpu().numpy()
-            print("State weights rank:", state_weight_idx+1)
-            print("State weights:", state_attn_weights[sample_idx].squeeze()[state_weight_idx].cpu().detach().numpy())
-        if attn_weights is not None:
-            attn_weights = attn_weights[-1]
-            mask_idx = batch['whole_instruction_mask'][sample_idx]
-            attn_weight = attn_weights[sample_idx].squeeze()
-            weights_idx = torch.argsort(attn_weight[~mask_idx], descending=True).cpu().numpy()
-            words_idx = batch['whole_instruction'].cpu().numpy()[sample_idx][weights_idx]
-            print("Attention words:",
-                  [self.train_dataset.idx_to_word[idx] for idx in words_idx])
-            print("Attention weights:",
-                  attn_weight[weights_idx].detach().cpu().numpy())
+        print("After env: ",
+              batch['after_env_str'][sample_idx])
+        print("Predicted env: ",
+              world_states[sample_idx])
 
     def validation_step(self, batch, batch_idx):
         # forward
@@ -225,11 +207,11 @@ class AlchemySolver(pl.LightningModule):
             if len(incorrect_prediction) > 0:
                 print("########{} incorrect sample:".format(batch_idx))
                 sample_idx = incorrect_prediction[np.random.randint(0, len(incorrect_prediction))]
-                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, sample_idx)
             if len(correct_prediction) > 0:
                 print("########{} correct sample:".format(batch_idx))
                 sample_idx = correct_prediction[np.random.randint(0, len(correct_prediction))]
-                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, sample_idx)
+                self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, sample_idx)
         # return values
         tqdm_dict = {
             'val_loss': loss,
@@ -270,7 +252,7 @@ class AlchemySolver(pl.LightningModule):
             predicted_actions = []
             for idx in range(self.hparams.test_batch_size):
                 try:
-                    self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, idx)
+                    self._print_sample(batch, decoded_actions, attn_weights, state_attn_weights, world_states, idx)
                     predicted_actions.append([self.train_dataset.idx_to_action_words[i]
                                                                    for i in predict_labels.cpu().numpy()[idx]])
                 except IndexError:
@@ -281,6 +263,7 @@ class AlchemySolver(pl.LightningModule):
 
         # interaction prediction
         else:
+            # pass
             decoded_actions, world_states = self.model.predict_interaction(batch)
             self.test_interaction_results['id'] += batch['identifier']
             self.test_interaction_results['final_world_state'] += world_states
@@ -322,7 +305,7 @@ class AlchemySolver(pl.LightningModule):
         ###########  output ##############
         output = OrderedDict({
             'instruction_acc': instruction_acc,
-            'interaction_acc': interaction_acc,
+            # 'interaction_acc': interaction_acc,
             'progress_bar': {},
             'log': {
                 'instruction_acc': instruction_acc,
@@ -373,11 +356,11 @@ def main():
     argparse = ArgumentParser()
     argparse.add_argument("--train_data", dest="train_data", default='data/train_sequences.json')
     argparse.add_argument("--val_data", dest="val_data", default='data/dev_sequences.json')
-    argparse.add_argument("--test_data", dest="test_data", default='/home/ec2-user/nlp/scone/data/alchemy/test_sequences.json')
+    argparse.add_argument("--test_data", dest="test_data", default='data/test_sequences.json')
     argparse.add_argument("--test_interaction_label", dest="test_interaction_label",
-                          default='/home/ec2-user/nlp/scone/data/alchemy/test_interaction_y.csv')
+                          default='data/test_interaction_y.csv')
     argparse.add_argument("--test_instruction_label", dest="test_instruction_label",
-                          default='/home/ec2-user/nlp/scone/data/alchemy/test_instruction_y.csv')
+                          default='data/test_instruction_y.csv')
     argparse.add_argument("--test_result", dest="test_result",
                           default='results/test_pred')
     argparse.add_argument("--train_batch_size",
@@ -391,10 +374,10 @@ def main():
                           dest="val_batch_size", type=int, default=16)
     argparse.add_argument("--num_worker",
                           help="number of worker for dataloader",
-                          dest="num_worker", type=int, default=4)
+                          dest="num_worker", type=int, default=10)
     argparse.add_argument("--hidden_size",
                           help="size of the hidden layer of RNN",
-                          dest="hidden_size", type=int, default=100)
+                          dest="hidden_size", type=int, default=128)
     argparse.add_argument("--num_layers",
                           help="number of layers of the RNN",
                           dest="num_layers", type=int, default=1)
@@ -425,6 +408,13 @@ def main():
                           dest="use_attention",
                           action="store_true",
                           default=True)
+    argparse.add_argument("--model_name",
+                          help="model name",
+                          dest="model_name",
+                          default="default")
+    argparse.add_argument("--version_name",
+                          help="version name",
+                          dest="version_name")
     argparse.add_argument("-p", "--percent_check",
                           help="use only a certain percentage of data to run",
                           dest="percent_check",
@@ -443,8 +433,20 @@ def main():
         solver = AlchemySolver(hparams=args)
 
     # turn off logging / checkpointing if running test
-    use_logger = False if args.unit_test or args.run_test else True
-    use_checkpoint_callback = False if args.unit_test or args.run_test else True
+    use_logger = False if args.unit_test or args.run_test else pl.loggers.tensorboard.TensorBoardLogger(
+        save_dir='./lightning_logs',
+        name=args.model_name)
+
+
+    use_checkpoint_callback = False if args.unit_test or args.run_test \
+        else pl.callbacks.ModelCheckpoint(filepath=os.path.join(use_logger.log_dir,
+                                                                'version_{}'.format(use_logger.version),
+                                                                'checkpoints'),
+                                          save_top_k=True,
+                                          verbose=True,
+                                          monitor='val_acc',
+                                          mode='max',
+                                          prefix='')
 
     trainer = pl.Trainer(gpus=1,
                          deterministic=True,
@@ -453,7 +455,8 @@ def main():
                          logger=use_logger,
                          checkpoint_callback=use_checkpoint_callback,
                          overfit_pct=args.percent_check,
-                         callbacks=[LearningRateCallBack()]
+                         callbacks=[LearningRateCallBack()],
+                         gradient_clip_val=1.0,
                          )
 
     if not args.run_test:
