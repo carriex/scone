@@ -12,6 +12,7 @@ import torch
 import numpy as np
 import random
 import pandas as pd
+import os
 from sklearn.metrics import accuracy_score
 from collections import OrderedDict
 from model import SeqToSeqModel
@@ -460,17 +461,18 @@ def main():
     use_logger = False if args.unit_test or args.run_test else pl.loggers.tensorboard.TensorBoardLogger(
         save_dir='./lightning_logs',
         name=args.model_name)
-    use_checkpoint_callback = False if args.unit_test or args.run_test else True
 
-    if args.unit_test or args.run_test:
-        use_logger = False
-    elif args.version_name is not None:
-        use_logger = pl.loggers.tensorboard.TensorBoardLogger(save_dir='./lightning_logs',
-                                                              name=args.model_name,
-                                                              version=args.version_name)
-    else:
-        use_logger = pl.loggers.tensorboard.TensorBoardLogger(save_dir='./lightning_logs',
-                                                              name=args.model_name)
+
+    use_checkpoint_callback = False if args.unit_test or args.run_test \
+        else pl.callbacks.ModelCheckpoint(filepath=os.path.join(use_logger.log_dir,
+                                                                'version_{}'.format(use_logger.version),
+                                                                'checkpoints'),
+                                          save_top_k=True,
+                                          verbose=True,
+                                          monitor='val_acc',
+                                          mode='max',
+                                          prefix='')
+    
     trainer = pl.Trainer(gpus=1,
                          deterministic=True,
                          max_epochs=args.num_epoches,
