@@ -356,11 +356,11 @@ def main():
     argparse = ArgumentParser()
     argparse.add_argument("--train_data", dest="train_data", default='data/train_sequences.json')
     argparse.add_argument("--val_data", dest="val_data", default='data/dev_sequences.json')
-    argparse.add_argument("--test_data", dest="test_data", default='/home/ec2-user/nlp/scone/data/alchemy/test_sequences.json')
+    argparse.add_argument("--test_data", dest="test_data", default='data/test_sequences.json')
     argparse.add_argument("--test_interaction_label", dest="test_interaction_label",
-                          default='/home/ec2-user/nlp/scone/data/alchemy/test_interaction_y.csv')
+                          default='data/test_interaction_y.csv')
     argparse.add_argument("--test_instruction_label", dest="test_instruction_label",
-                          default='/home/ec2-user/nlp/scone/data/alchemy/test_instruction_y.csv')
+                          default='data/test_instruction_y.csv')
     argparse.add_argument("--test_result", dest="test_result",
                           default='results/test_pred')
     argparse.add_argument("--train_batch_size",
