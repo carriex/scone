@@ -282,33 +282,6 @@ class SeqToSeqModel(nn.Module):
             beaker_state_encoding.append(state_encoder_hidden[0])
         return torch.cat(beaker_state_encoding, dim=0).transpose(0, 1)
 
-    # def _encode_beakers_state(self, world_states_strs):
-    #     """
-    #     Encode a batch of beaker state strings
-    #     Inputs:
-    #         world_states_strs(String): Batch of List of String representing beaker state
-    #     Outputs:
-    #         embeddings(Tensor): embedding of the beaker states; shape: batch_size x state encoder hidden size
-    #     """
-    #     batch_size = len(world_states_strs)
-    #     batch_states = [self.vocab.preprocess_world_state_str(state_str) for state_str in world_states_strs]
-    #     # join beaker states into one string
-    #     # (batch_size, )
-    #     batch_states = " ".join(batch_states)
-    #     beaker_state_encoding = []
-    #     state_encoder_hidden = self.state_beaker_encoder.initHidden(batch_size, self.gpu_index)
-    #     batch_state = torch.stack(
-    #         [self.vocab.encode_and_pad_beaker_state(batch_states[idx]) for idx in range(batch_size)])
-    #     ### move tensor to GPU ###
-    #     if torch.cuda.is_available():
-    #         batch_state = batch_state.cuda(self.gpu_index)
-    #     ###########################
-    #     for idx in range(self.vocab.max_beaker_state_length):
-    #         state_encoder_output, state_encoder_hidden = self.state_beaker_encoder(
-    #             batch_state[idx], state_encoder_hidden
-    #         )
-    #     beaker_state_encoding.append(state_encoder_hidden[0])
-    #     return torch.cat(beaker_state_encoding, dim=0).transpose(0, 1)
 
     def _decode(self, instruction_encoder_hidden,
                        encoder_states,

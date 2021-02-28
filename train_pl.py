@@ -30,8 +30,6 @@ def seed_everything(seed):
 
 class LearningRateCallBack(pl.Callback):
     '''Call back function for checking learning rate'''
-    def on_init_start(self, trainer):
-        print('Starting to init trainer!')
     def on_epoch_end(self, trainer, pl_module):
         if trainer.lr_schedulers:
             for scheduler in trainer.lr_schedulers:
@@ -62,18 +60,12 @@ class AlchemySolver(pl.LightningModule):
             instruction_input_size=len(self.train_dataset.word_to_idx),
             state_input_size=len(self.train_dataset.state_to_idx),
             hidden_size=self.hparams.hidden_size,
-            # max_encoder_length=self.train_dataset.max_instruction_length,
             max_encoder_length=self.train_dataset.max_whole_instruction_length,
             max_decoder_length=self.train_dataset.max_action_word_length,
             action_SOS_token=self.train_dataset.action_word_to_idx['_SOS'],
             action_EOS_token=self.train_dataset.action_word_to_idx['_EOS'],
             action_PAD_token=self.train_dataset.action_word_to_idx['_PAD'],
             output_size=self.train_dataset.num_word_actions,
-            # max_decoder_length=self.train_dataset.max_action_length,
-            # action_SOS_token=self.train_dataset.action_to_idx['_SOS'],
-            # action_EOS_token=self.train_dataset.action_to_idx['_EOS'],
-            # action_PAD_token=self.train_dataset.action_to_idx['_PAD'],
-            # output_size=self.train_dataset.num_actions,
             state_to_idx=self.train_dataset.state_to_idx,
             idx_to_action=self.train_dataset.idx_to_action,
             idx_to_action_word=self.train_dataset.idx_to_action_words,
@@ -193,8 +185,6 @@ class AlchemySolver(pl.LightningModule):
         print(">>>Idx {} Before env: ".format(batch['identifier'][sample_idx]), batch['before_env_str'][sample_idx])
         print("Instruction:",
               [self.train_dataset.idx_to_word[idx] for idx in batch['whole_instruction'].cpu().numpy()[sample_idx]])
-        # print("Instruction:",
-        #       [self.train_dataset.idx_to_word[idx] for idx in batch['whole_instruction'].cpu().numpy()[sample_idx]])
         print("Action words:",
         [self.train_dataset.idx_to_action_words[idx] for idx in batch['action_words'].cpu().numpy()[sample_idx]])
         print("Predicted actions:",
@@ -203,21 +193,6 @@ class AlchemySolver(pl.LightningModule):
               batch['after_env_str'][sample_idx])
         print("Predicted env: ",
               world_states[sample_idx])
-        # if state_attn_weights is not None:
-        #     state_attn_weights = state_attn_weights[-1]
-        #     state_weight_idx = torch.argsort(state_attn_weights[sample_idx], descending=True).cpu().numpy()
-        #     print("State weights rank:", state_weight_idx+1)
-        #     print("State weights:", state_attn_weights[sample_idx].squeeze()[state_weight_idx].cpu().detach().numpy())
-        # if attn_weights is not None:
-        #     attn_weights = attn_weights[-1]
-        #     mask_idx = batch['whole_instruction_mask'][sample_idx]
-        #     attn_weight = attn_weights[sample_idx].squeeze()
-        #     weights_idx = torch.argsort(attn_weight[~mask_idx], descending=True).cpu().numpy()
-        #     words_idx = batch['whole_instruction'].cpu().numpy()[sample_idx][weights_idx]
-        #     print("Attention words:",
-        #           [self.train_dataset.idx_to_word[idx] for idx in words_idx])
-        #     print("Attention weights:",
-        #           attn_weight[weights_idx].detach().cpu().numpy())
 
     def validation_step(self, batch, batch_idx):
         # forward
@@ -472,7 +447,7 @@ def main():
                                           monitor='val_acc',
                                           mode='max',
                                           prefix='')
-    
+
     trainer = pl.Trainer(gpus=1,
                          deterministic=True,
                          max_epochs=args.num_epoches,
